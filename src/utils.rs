@@ -7,19 +7,12 @@ pub fn encode(s: &str) -> String {
 }
 
 pub fn decode(s: &str) -> Result<String, FromUtf8Error> {
-    match String::from_utf8(STANDARD_NO_PAD.decode(s).unwrap()) {
-        Ok(v) => return Ok(v),
-        Err(e) => return Err(e),
-    }
+    String::from_utf8(STANDARD_NO_PAD.decode(s).unwrap())
 }
 
 pub fn get_contents_vec<P: AsRef<Path>>(path: P) -> std::io::Result<Vec<String>> {
     let file = std::fs::read_to_string(path)?;
-    Ok(file
-        .split("\n")
-        .into_iter()
-        .map(|val| String::from(val))
-        .collect::<Vec<String>>())
+    Ok(file.split("\n").map(String::from).collect::<Vec<String>>())
 }
 
 #[test]
