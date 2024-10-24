@@ -1,0 +1,15 @@
+[package]
+name = "discordhttp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "*", features = ["derive"]}
+serde_json = "*"
+reqwest = {version = "0.11.1", features= ["stream", "__rustls", "rustls-tls-webpki-roots", "__tls", "rustls-tls-native-roots", "native-tls", "json", "http3", "cookies"]} 
+url = "2.5.2"
+base64 = "0.22.1"
+tokio = { version = "1.41.0", features = ["macros", "rt-multi-thread"] }
+
+[profile.dev]
+incremental = true
