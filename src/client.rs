@@ -43,7 +43,7 @@ impl DiscordClient {
 
 #[tokio::test]
 async fn request_builder_test() {
-    let client = DiscordClient::default();
+    let client = DiscordClient::new().await;
     client
         .send_request(HttpRequest::Get {
             endpoint: "/users/@me".to_string(),
