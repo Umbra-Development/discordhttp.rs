@@ -4,7 +4,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use std::path::Path;
 use std::string::FromUtf8Error;
 
-use crate::{client::Client, types::SuperProperties};
+use crate::types::SuperProperties;
 
 pub fn encode(s: &str) -> String {
     STANDARD_NO_PAD.encode(s)
@@ -109,9 +109,8 @@ fn build_super_properties(user_agent: &String) -> String {
 
     // Serialize SuperProperties to JSON and encode it in base64
     let strsuper = serde_json::to_string(&super_properties).unwrap();
-    let return_val = encode(&strsuper);
+    encode(&strsuper)
 
-    return_val
     // return "eyJvcyI6IkxpbnV4IiwiYnJvd3NlciI6IkRpc2NvcmQgQ2xpZW50IiwicmVsZWFzZV9jaGFubmVsIjoic3RhYmxlIiwiY2xpZW50X3ZlcnNpb24iOiIwLjAuNzEiLCJvc192ZXJzaW9uIjoiNi4xLjExMi0xLU1BTkpBUk8iLCJvc19hcmNoIjoieDY0IiwiYXBwX2FyY2giOiJ4NjQiLCJzeXN0ZW1fbG9jYWxlIjoiZW4tVVMiLCJicm93c2VyX3VzZXJfYWdlbnQiOiJNb3ppbGxhLzUuMCAoWDExOyBMaW51eCB4ODZfNjQpIEFwcGxlV2ViS2l0LzUzNy4zNiAoS0hUTUwsIGxpa2UgR2Vja28pIGRpc2NvcmQvMC4wLjcxIENocm9tZS8xMjguMC42NjEzLjM2IEVsZWN0cm9uLzMyLjAuMCBTYWZhcmkvNTM3LjM2IiwiYnJvd3Nlcl92ZXJzaW9uIjoiMzIuMC4wIiwid2luZG93X21hbmFnZXIiOiJLREUsdW5rbm93biIsImRpc3RybyI6IlwiTWFuamFybyBMaW51eFwiIiwiY2xpZW50X2J1aWxkX251bWJlciI6MzM2OTczLCJuYXRpdmVfYnVpbGRfbnVtYmVyIjpudWxsLCJjbGllbnRfZXZlbnRfc291cmNlIjpudWxsfQ==".to_string();
 }
 
@@ -154,12 +153,12 @@ pub fn default_headers(user_agent: Option<String>) -> HeaderMap {
 
     let browser = browser_regex
         .captures(&user_agent_1)
-        .and_then(|caps| Some((caps[1].to_string(), caps[2].to_string())))
+        .map(|caps| (caps[1].to_string(), caps[2].to_string()))
         .unwrap_or(("Unknown".to_string(), "Unknown".to_string()));
 
     let platform = platform_regex
         .captures(&user_agent_1)
-        .and_then(|caps| Some(caps[1].to_string()))
+        .map(|caps| caps[1].to_string())
         .unwrap_or("Unknown".to_string());
 
     // Add sec-ch-ua header (For simplicity, using fixed version numbers for Chromium)
