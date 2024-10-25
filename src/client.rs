@@ -1,6 +1,11 @@
+use crate::easy_headers;
 use crate::types::HttpRequest;
 use crate::utils::{default_headers, experiment_headers, merge_headermaps};
-use reqwest::Response;
+// Required for macro idfk why
+use reqwest::{
+    header::{HeaderMap, HeaderName, HeaderValue},
+    Response,
+};
 use std::error::Error;
 
 pub type Client = DiscordClient;
@@ -9,11 +14,10 @@ pub type Client = DiscordClient;
 pub struct DiscordClient {
     pub client: reqwest::Client,
     pub proxy_info: Option<url::Url>,
-    pub token: String,
 }
 
 impl DiscordClient {
-    pub async fn new(token: &str) -> DiscordClient {
+    pub async fn new() -> DiscordClient {
         // I have no idea atp, pls fix
         let mut real_headers = default_headers(None);
         let other_headers = experiment_headers(reqwest::Client::new()).await;
@@ -32,7 +36,6 @@ impl DiscordClient {
 
         Self {
             client,
-            token: token.to_string(),
             proxy_info: None,
         }
     }
@@ -41,19 +44,24 @@ impl DiscordClient {
 impl DiscordClient {
     pub async fn send_request(&self, request: HttpRequest) -> Result<Response, Box<dyn Error>> {
         let builder = request.to_request_builder(&self.client);
-        let response = builder.header("authorization", &self.token).send().await?;
+
+        let response = builder.send().await?;
         Ok(response)
     }
 }
 
 #[tokio::test]
 async fn request_builder_test() {
-    let client = DiscordClient::new("abcd1234").await;
-    client
+    let client = DiscordClient::new().await;
+    let response = client
         .send_request(HttpRequest::Get {
             endpoint: "/users/@me".to_string(),
             params: None,
+            additional_headers: Some(
+                easy_headers!({"authorization" => format!("{}", "my epic token")} ),
+            ),
         })
         .await
         .unwrap();
+    println!("{}", response.text().await.unwrap());
 }

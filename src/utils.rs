@@ -1,6 +1,6 @@
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
 use regex::Regex;
-use reqwest::header::{HeaderMap, HeaderValue};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use std::path::Path;
 use std::string::FromUtf8Error;
 
@@ -8,6 +8,19 @@ use crate::types::SuperProperties;
 
 pub fn encode(s: &str) -> String {
     STANDARD_NO_PAD.encode(s)
+}
+
+#[macro_export]
+macro_rules! easy_headers {
+    ( { $($key:expr => $value:expr),* $(,)? } ) => {{
+        let mut headers = HeaderMap::new();
+        $(
+            let header_name = $key.parse::<HeaderName>().unwrap();
+            let header_value = HeaderValue::from_str(&$value.to_string()).unwrap();
+            headers.insert(header_name, header_value);
+        )*
+        headers
+    }};
 }
 
 pub fn decode(s: &str) -> Result<String, FromUtf8Error> {
@@ -115,38 +128,11 @@ fn build_super_properties(user_agent: &String) -> String {
 }
 
 pub fn default_headers(user_agent: Option<String>) -> HeaderMap {
-    let mut headers = HeaderMap::new();
-    // let cookie = format!(
-    //     "__dcfduid={dcfduid}; __sdcfduid={sdcfduid}, locale=en-US",
-    //     dcfduid = dcfduid(),
-    //     sdcfduid = sdcfduid()
-    // );
     let user_agent_1 = user_agent.unwrap_or(randua::new().safari().desktop().to_string());
-    // let user_agent = ;
+    let context = "eyJsb2NhdGlvbiI6IlJlZ2lzdGVyIn0="
+        .parse::<String>()
+        .expect("valid");
     let super_properties = build_super_properties(&user_agent_1);
-    headers.insert("user-agent", HeaderValue::from_str(&user_agent_1).unwrap());
-    // headers.insert("cookie", HeaderValue::from_str(&cookie).unwrap());
-    headers.insert("host", HeaderValue::from_static("discord.com"));
-    headers.insert("accept", HeaderValue::from_static("*/*"));
-    headers.insert("accept-language", HeaderValue::from_static("en-US"));
-    headers.insert("content-type", HeaderValue::from_static("application/json"));
-    headers.insert("DNT", HeaderValue::from_static("1"));
-    headers.insert("connecton", HeaderValue::from_static("keep-alive"));
-    headers.insert(
-        "x-super-properties",
-        HeaderValue::from_str(&super_properties).unwrap(),
-    );
-    headers.insert(
-        "x-debug-options",
-        HeaderValue::from_static("bugReporterEnabled"),
-    );
-
-    headers.insert(
-        "x-discord-timezone",
-        HeaderValue::from_static("America/New_York"),
-    );
-
-    // Extract browser and version info using regex
     let browser_regex =
         Regex::new(r"(?i)(firefox|chrome|safari|discord|electron)/([0-9\.]+)").unwrap();
     let platform_regex = Regex::new(r"\(([^;]+);").unwrap();
@@ -161,42 +147,31 @@ pub fn default_headers(user_agent: Option<String>) -> HeaderMap {
         .map(|caps| caps[1].to_string())
         .unwrap_or("Unknown".to_string());
 
-    // Add sec-ch-ua header (For simplicity, using fixed version numbers for Chromium)
-    headers.insert(
-        "sec-ch-ua",
-        HeaderValue::from_str(&format!(
-            "\"Not;A=Brand\";v=\"24\", \"{}\";v=\"{}\"",
-            browser.0, browser.1
-        ))
-        .unwrap(),
-    );
+    let headers = easy_headers!({
+        "user-agent" => format!("{}", user_agent_1),
+        "host" => "discord.com",
+        "accept" => "*/*",
+        "accept-language" => "en-US",
+        "content-type" => "application/json",
+        "DNT" => "1",
+        "connection" => "keep-alive",
+        "x-super-properties" => format!("{}", &super_properties),
+        "x-debug-options" => "bugReporterEnabled",
+        "x-discord-timezone" => "America/New_York",
+        "sec-ch-ua" => format!("\"Not;A=Brand\";v=\"24\", \"{}\";v=\"{}\"", browser.0, browser.1),
+        "sec-ch-ua-mobile" => "?0",
+        "sec-ch-ua-platform" => format!("\"{}\"", platform),
+        "sec-fetch-dest" => "empty",
+        "sec-fetch-mode" => "cors",
+        "sec-fetch-site" => "same-origin",
+        "x-context-properties" => format!("{}", context)
 
-    // Add sec-ch-ua-mobile header (assuming desktop, ?0)
-    headers.insert("sec-ch-ua-mobile", HeaderValue::from_static("?0"));
+    });
 
-    // Add sec-ch-ua-platform header (based on extracted platform)
-    headers.insert(
-        "sec-ch-ua-platform",
-        HeaderValue::from_str(&format!("\"{}\"", platform)).unwrap(),
-    );
-
-    // Add sec-fetch-dest header
-    headers.insert("sec-fetch-dest", HeaderValue::from_static("empty"));
-
-    // Add sec-fetch-mode header
-    headers.insert("sec-fetch-mode", HeaderValue::from_static("cors"));
-
-    // Add sec-fetch-site header
-    headers.insert("sec-fetch-site", HeaderValue::from_static("same-origin"));
-
-    headers.insert(
-        "x-context-properties",
-        "eyJsb2NhdGlvbiI6IlJlZ2lzdGVyIn0=".parse().expect("valid"),
-    );
     headers
 }
 pub async fn experiment_headers(reqwest_client: reqwest::Client) -> HeaderMap {
-    let mut headers = default_headers(None);
+    let headers = default_headers(None);
     let resp = reqwest_client
         .get("https://discord.com/api/v9/experiments?with_guild_experiments=true")
         .headers(headers.clone())
@@ -221,17 +196,10 @@ pub async fn experiment_headers(reqwest_client: reqwest::Client) -> HeaderMap {
 
     let fingerprint = result["fingerprint"].as_str().unwrap().to_string();
 
-    headers.insert(
-        "x-fingerprint",
-        HeaderValue::from_str(&fingerprint).expect("Failed to assign fingerprint"), // HeaderValue::from_static("878085544222003271.hYXin384hC-Q7MNGSdXmx75MYTI"),
-    );
-
-    headers.insert(
-        "cookie",
-        HeaderValue::from_str(&final_cookie).expect("Failed to assign cookies"), // HeaderValue::from_static("878085544222003271.hYXin384hC-Q7MNGSdXmx75MYTI"),
-    );
-
-    headers.remove("x-context-properties");
+    let headers = easy_headers!({
+        "x-fingerprint" => &fingerprint,
+        "cookie" => &final_cookie,
+    });
 
     headers
 }
@@ -246,4 +214,14 @@ fn encode_test() {
 fn decode_test() {
     let val = "MTE0MzY1NzUwMjk0MTEyMjU4MA";
     assert_eq!(&decode(val).unwrap(), "1143657502941122580")
+}
+
+#[test]
+fn headers_macro() {
+    let headers = easy_headers!({
+        "authorization" => "token",
+        "foo" => format!("{}", 123)
+    });
+
+    println!("{headers:?}");
 }
