@@ -1,8 +1,13 @@
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
 use regex::Regex;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use rustls::crypto::CryptoProvider;
+use rustls::version::{TLS12, TLS13};
+use rustls::{CipherSuite, ClientConfig, RootCertStore};
 use std::path::Path;
+
 use std::string::FromUtf8Error;
+use std::sync::Arc;
 
 use crate::types::SuperProperties;
 
@@ -38,6 +43,18 @@ pub fn merge_headermaps(first: &mut HeaderMap, second: HeaderMap) {
             first.insert(key, value);
         }
     }
+}
+
+pub fn create_custom_tls_config() -> ClientConfig {
+    let mut crypto_provider = CryptoProvider::get_default().unwrap();
+    let mut root_store = RootCertStore::empty();
+    root_store.add_parsable_certificates(rustls_native_certs::load_native_certs().unwrap());
+
+    let client_config = ClientConfig::builder_with_protocol_versions(&[&TLS12, &TLS13])
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+
+    client_config
 }
 
 fn extract_browser_version(user_agent: &str, browser: &str) -> String {
@@ -217,4 +234,9 @@ fn headers_macro() {
         "authorization" : "token",
         "foo" : format!("{}", 123)
     });
+}
+
+#[test]
+fn all_versions() {
+    println!("{}", ALL_VERSIONS);
 }

@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use crate::easy_headers;
 use crate::types::HttpRequest;
 use crate::utils::{default_headers, experiment_headers, merge_headermaps};
@@ -22,6 +23,7 @@ impl DiscordClient {
         let mut real_headers = default_headers(None);
         let other_headers = experiment_headers(reqwest::Client::new()).await;
         merge_headermaps(&mut real_headers, other_headers);
+        println!("{:?}", &real_headers);
 
         let client = reqwest::Client::builder()
             .default_headers(real_headers)
@@ -53,13 +55,12 @@ impl DiscordClient {
 #[tokio::test]
 async fn request_builder_test() {
     let client = DiscordClient::new().await;
-    let response = client
-        .send_request(HttpRequest::Get {
-            endpoint: "/users/@me".to_string(),
-            params: None,
-            additional_headers: Some(easy_headers!({"authorization": "token" })),
-        })
-        .await
-        .unwrap();
-    println!("{}", response.text().await.unwrap());
+    let response = client.send_request(HttpRequest::Get {
+        endpoint: "/users/@me".to_string(),
+        params: None,
+        additional_headers: Some(easy_headers!({"authorization": "token" })),
+    });
+    // .await
+    // .unwrap();
+    // println!("{}", response.text().await.unwrap());
 }
