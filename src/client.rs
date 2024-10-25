@@ -57,7 +57,7 @@ async fn request_builder_test() {
         .send_request(HttpRequest::Get {
             endpoint: "/users/@me".to_string(),
             params: None,
-            additional_headers: Some(easy_headers!({"authorization" => "token" })),
+            additional_headers: Some(easy_headers!({"authorization": "token" })),
         })
         .await
         .unwrap();

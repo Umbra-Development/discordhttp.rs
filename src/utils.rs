@@ -12,7 +12,7 @@ pub fn encode(s: &str) -> String {
 
 #[macro_export]
 macro_rules! easy_headers {
-    ( { $($key:expr => $value:expr),* $(,)? } ) => {{
+    ( { $($key:tt : $value:expr),* $(,)? } ) => {{
         let mut headers = HeaderMap::new();
         $(
             let header_name = $key.parse::<HeaderName>().unwrap();
@@ -148,23 +148,23 @@ pub fn default_headers(user_agent: Option<String>) -> HeaderMap {
         .unwrap_or("Unknown".to_string());
 
     easy_headers!({
-        "user-agent" => user_agent_1,
-        "host" => "discord.com",
-        "accept" => "*/*",
-        "accept-language" => "en-US",
-        "content-type" => "application/json",
-        "DNT" => "1",
-        "connection" => "keep-alive",
-        "x-super-properties" => &super_properties,
-        "x-debug-options" => "bugReporterEnabled",
-        "x-discord-timezone" => "America/New_York",
-        "sec-ch-ua" => format!("\"Not;A=Brand\";v=\"24\", \"{}\";v=\"{}\"", browser.0, browser.1),
-        "sec-ch-ua-mobile" => "?0",
-        "sec-ch-ua-platform" => format!("\"{}\"", platform),
-        "sec-fetch-dest" => "empty",
-        "sec-fetch-mode" => "cors",
-        "sec-fetch-site" => "same-origin",
-        "x-context-properties" => context
+        "user-agent": user_agent_1,
+        "host": "discord.com",
+        "accept": "*/*",
+        "accept-language": "en-US",
+        "content-type": "application/json",
+        "DNT": "1",
+        "connection": "keep-alive",
+        "x-super-properties": &super_properties,
+        "x-debug-options": "bugReporterEnabled",
+        "x-discord-timezone": "America/New_York",
+        "sec-ch-ua": format!("\"Not;A=Brand\";v=\"24\", \"{}\";v=\"{}\"", browser.0, browser.1),
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": format!("\"{}\"", platform),
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
+        "x-context-properties": context
     })
 }
 pub async fn experiment_headers(reqwest_client: reqwest::Client) -> HeaderMap {
@@ -194,8 +194,8 @@ pub async fn experiment_headers(reqwest_client: reqwest::Client) -> HeaderMap {
     let fingerprint = result["fingerprint"].as_str().unwrap().to_string();
 
     easy_headers!({
-        "x-fingerprint" => &fingerprint,
-        "cookie" => &final_cookie,
+        "x-fingerprint": &fingerprint,
+        "cookie": &final_cookie,
     })
 }
 
@@ -214,7 +214,7 @@ fn decode_test() {
 #[test]
 fn headers_macro() {
     easy_headers!({
-        "authorization" => "token",
-        "foo" => format!("{}", 123)
+        "authorization" : "token",
+        "foo" : format!("{}", 123)
     });
 }
