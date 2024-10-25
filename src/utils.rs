@@ -1,11 +1,12 @@
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
 use regex::Regex;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use rustls::crypto::aws_lc_rs::cipher_suite::*;
 use rustls::crypto::CryptoProvider;
 use rustls::version::{TLS12, TLS13};
-use rustls::{CipherSuite, ClientConfig, RootCertStore};
-use std::path::Path;
+use rustls::{CipherSuite, ClientConfig, RootCertStore, SupportedCipherSuite};
 
+use std::path::Path;
 use std::string::FromUtf8Error;
 use std::sync::Arc;
 
@@ -46,7 +47,19 @@ pub fn merge_headermaps(first: &mut HeaderMap, second: HeaderMap) {
 }
 
 pub fn create_custom_tls_config() -> ClientConfig {
-    let mut crypto_provider = CryptoProvider::get_default().unwrap();
+    let mut crypto_provider = CryptoProvider {
+        cipher_suites: vec![
+            TLS13_AES_256_GCM_SHA384,
+            TLS13_AES_128_GCM_SHA256,
+            TLS13_CHACHA20_POLY1305_SHA256,
+            TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+            TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+            TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
+            TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+            TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+            TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+        ],
+    };
     let mut root_store = RootCertStore::empty();
     root_store.add_parsable_certificates(rustls_native_certs::load_native_certs().unwrap());
 
