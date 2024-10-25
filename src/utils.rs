@@ -2,9 +2,12 @@ use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
 use regex::Regex;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
-use rustls::crypto::aws_lc_rs::kx_group::*;
-use rustls::crypto::CryptoProvider;
-use rustls::crypto::{aws_lc_rs::cipher_suite::*, WebPkiSupportedAlgorithms};
+use rustls::crypto::{
+    aws_lc_rs::{cipher_suite::*, kx_group::*},
+    ring::*,
+    WebPkiSupportedAlgorithms,
+};
+use rustls::crypto::{CryptoProvider, SecureRandom};
 use rustls::version::{TLS12, TLS13};
 use rustls::{ClientConfig, RootCertStore};
 
@@ -65,7 +68,10 @@ pub fn create_custom_tls_config() -> ClientConfig {
         ],
         kx_groups: vec![SECP256R1, SECP384R1, X25519],
         signature_verification_algorithms: todo!(),
+
+        // Idfk atp
         secure_random: &SystemRandom::new(),
+        key_provider: &default_provider(),
     };
     let mut root_store = RootCertStore::empty();
     root_store.add_parsable_certificates(rustls_native_certs::load_native_certs().unwrap());
