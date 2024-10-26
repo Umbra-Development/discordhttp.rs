@@ -2,16 +2,11 @@ use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
 use regex::Regex;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
-use rustls::crypto::{
-    aws_lc_rs::{cipher_suite::*, kx_group::*},
-    ring::*,
-    WebPkiSupportedAlgorithms,
-};
-use rustls::crypto::{CryptoProvider, SecureRandom};
+use rustls::crypto::aws_lc_rs::{cipher_suite::*, default_provider, kx_group::*};
+use rustls::crypto::CryptoProvider;
 use rustls::version::{TLS12, TLS13};
+use rustls::ALL_VERSIONS;
 use rustls::{ClientConfig, RootCertStore};
-
-use ring::rand::SystemRandom;
 
 use std::path::Path;
 use std::string::FromUtf8Error;
@@ -54,7 +49,7 @@ pub fn merge_headermaps(first: &mut HeaderMap, second: HeaderMap) {
 }
 
 pub fn create_custom_tls_config() -> ClientConfig {
-    let mut crypto_provider = CryptoProvider {
+    let crypto_provider = CryptoProvider {
         cipher_suites: vec![
             TLS13_AES_256_GCM_SHA384,
             TLS13_AES_128_GCM_SHA256,
@@ -67,18 +62,25 @@ pub fn create_custom_tls_config() -> ClientConfig {
             TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
         ],
         kx_groups: vec![SECP256R1, SECP384R1, X25519],
-        signature_verification_algorithms: todo!(),
 
-        // Idfk atp
-        secure_random: &SystemRandom::new(),
-        key_provider: &default_provider(),
+        secure_random: default_provider().secure_random,
+        key_provider: default_provider().key_provider,
+        signature_verification_algorithms: default_provider().signature_verification_algorithms,
     };
     let mut root_store = RootCertStore::empty();
     root_store.add_parsable_certificates(rustls_native_certs::load_native_certs().unwrap());
 
-    let client_config = ClientConfig::builder_with_protocol_versions(&[&TLS12, &TLS13])
+    let mut client_config = ClientConfig::builder_with_provider(Arc::new(crypto_provider))
+        .with_protocol_versions(&[&TLS12, &TLS13])
+        .unwrap()
         .with_root_certificates(root_store)
         .with_no_client_auth();
+
+    // http/3 and http/2
+    client_config.alpn_protocols = vec![b"h3".to_vec(), b"h2".to_vec()];
+
+    // Zero-Round Trip according to docs
+    client_config.enable_early_data = true;
 
     client_config
 }
@@ -260,9 +262,4 @@ fn headers_macro() {
         "authorization" : "token",
         "foo" : format!("{}", 123)
     });
-}
-
-#[test]
-fn all_versions() {
-    println!("{}", ALL_VERSIONS);
 }

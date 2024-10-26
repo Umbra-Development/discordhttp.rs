@@ -1,7 +1,9 @@
 #![allow(unused_imports)]
 use crate::easy_headers;
 use crate::types::HttpRequest;
-use crate::utils::{default_headers, experiment_headers, merge_headermaps};
+use crate::utils::{
+    create_custom_tls_config, default_headers, experiment_headers, merge_headermaps,
+};
 // Required for macro idfk why
 use reqwest::{
     header::{HeaderMap, HeaderName, HeaderValue},
@@ -23,7 +25,6 @@ impl DiscordClient {
         let mut real_headers = default_headers(None);
         let other_headers = experiment_headers(reqwest::Client::new()).await;
         merge_headermaps(&mut real_headers, other_headers);
-        println!("{:?}", &real_headers);
 
         let client = reqwest::Client::builder()
             .default_headers(real_headers)
@@ -32,7 +33,7 @@ impl DiscordClient {
             // From what I read in docs you basically don't have to pass cookie argument yourself
             // Though ig might as well do it initially though
             .cookie_store(true)
-            .use_rustls_tls()
+            .use_preconfigured_tls(create_custom_tls_config())
             .build()
             .unwrap();
 
@@ -55,12 +56,13 @@ impl DiscordClient {
 #[tokio::test]
 async fn request_builder_test() {
     let client = DiscordClient::new().await;
-    let response = client.send_request(HttpRequest::Get {
-        endpoint: "/users/@me".to_string(),
-        params: None,
-        additional_headers: Some(easy_headers!({"authorization": "token" })),
-    });
-    // .await
-    // .unwrap();
-    // println!("{}", response.text().await.unwrap());
+    let response = client
+        .send_request(HttpRequest::Get {
+            endpoint: "/users/@me".to_string(),
+            params: None,
+            additional_headers: Some(easy_headers!({"authorization": "token" })),
+        })
+        .await
+        .unwrap();
+    println!("{}", response.text().await.unwrap());
 }
