@@ -1,16 +1,9 @@
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
 use regex::Regex;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-
-use rustls::crypto::aws_lc_rs::{cipher_suite::*, default_provider, kx_group::*};
-use rustls::crypto::CryptoProvider;
-use rustls::version::{TLS12, TLS13};
-use rustls::ALL_VERSIONS;
-use rustls::{ClientConfig, RootCertStore};
+use rquest::header::{HeaderMap, HeaderName, HeaderValue};
 
 use std::path::Path;
 use std::string::FromUtf8Error;
-use std::sync::Arc;
 
 use crate::types::SuperProperties;
 
@@ -46,43 +39,6 @@ pub fn merge_headermaps(first: &mut HeaderMap, second: HeaderMap) {
             first.insert(key, value);
         }
     }
-}
-
-pub fn create_custom_tls_config() -> ClientConfig {
-    let crypto_provider = CryptoProvider {
-        cipher_suites: vec![
-            TLS13_AES_256_GCM_SHA384,
-            TLS13_AES_128_GCM_SHA256,
-            TLS13_CHACHA20_POLY1305_SHA256,
-            TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-            TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-            TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
-            TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-            TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-            TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
-        ],
-        kx_groups: vec![SECP256R1, SECP384R1, X25519],
-
-        secure_random: default_provider().secure_random,
-        key_provider: default_provider().key_provider,
-        signature_verification_algorithms: default_provider().signature_verification_algorithms,
-    };
-    let mut root_store = RootCertStore::empty();
-    root_store.add_parsable_certificates(rustls_native_certs::load_native_certs().unwrap());
-
-    let mut client_config = ClientConfig::builder_with_provider(Arc::new(crypto_provider))
-        .with_protocol_versions(&[&TLS12, &TLS13])
-        .unwrap()
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
-
-    // http/3 and http/2
-    client_config.alpn_protocols = vec![b"h3".to_vec(), b"h2".to_vec()];
-
-    // Zero-Round Trip according to docs
-    client_config.enable_early_data = true;
-
-    client_config
 }
 
 fn extract_browser_version(user_agent: &str, browser: &str) -> String {
@@ -212,7 +168,7 @@ pub fn default_headers(user_agent: Option<String>) -> HeaderMap {
         "x-context-properties": context
     })
 }
-pub async fn experiment_headers(reqwest_client: reqwest::Client) -> HeaderMap {
+pub async fn experiment_headers(reqwest_client: rquest::Client) -> HeaderMap {
     let headers = default_headers(None);
     let resp = reqwest_client
         .get("https://discord.com/api/v9/experiments?with_guild_experiments=true")

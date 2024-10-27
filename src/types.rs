@@ -1,4 +1,4 @@
-use reqwest::{
+use rquest::{
     header::{HeaderMap, HeaderValue},
     Client as RequestClient, Method, RequestBuilder,
 };
