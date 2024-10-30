@@ -5,6 +5,7 @@ use crate::utils::{default_headers, experiment_headers, merge_headermaps};
 // Required for macro idfk why
 
 use rquest::tls::Impersonate;
+use rquest::tls::Version;
 use rquest::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Response,
@@ -26,23 +27,18 @@ impl DiscordClient {
         let mut real_headers = default_headers(None);
         let other_headers = experiment_headers(
             rquest::Client::builder()
-                .impersonate(Impersonate::Chrome128)
+                .impersonate_without_headers(Impersonate::Chrome128)
                 .build()
                 .unwrap(),
         )
         .await;
         merge_headermaps(&mut real_headers, other_headers);
-        // let val = (&mut tls as &mut dyn Any).downcast_mut::<Option<ClientConfig>>();
-        // println!("{val:#?} OUTSIDE THE LIB");
         let client = rquest::Client::builder()
             .impersonate(Impersonate::Chrome128)
             .default_headers(real_headers)
-            // You originally used the default implementation for rewqest::cookie::Jar
-            // Pretty much does the same thing
-            // From what I read in docs you basically don't have to pass cookie argument yourself
-            // Though ig might as well do it initially though
             .enable_ech_grease()
             .cookie_store(true)
+            .max_tls_version(Version::TLS_1_2)
             .build()
             .unwrap();
 
@@ -75,3 +71,5 @@ async fn request_builder_test() {
         .unwrap();
     println!("{}", response.text().await.unwrap());
 }
+
+
