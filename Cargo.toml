@@ -15,7 +15,7 @@ regex = "1.11.1"
 ring = "0.17.8"
 webpki = "0.22.4"
 getrandom = "0.2.15"
-rquest = { version = "0.26.2", features = ["cookies"] }
+rquest = { version = "0.26.2", features = ["boring-tls", "cookies", "json"] }
 
 [profile.dev]
 incremental = true

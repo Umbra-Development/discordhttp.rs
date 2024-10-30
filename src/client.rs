@@ -10,6 +10,7 @@ use rquest::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Response,
 };
+use serde_json::{Value, from_str};
 use std::any::Any;
 use std::error::Error;
 
@@ -36,7 +37,6 @@ impl DiscordClient {
         let client = rquest::Client::builder()
             .impersonate(Impersonate::Chrome128)
             .default_headers(real_headers)
-            .enable_ech_grease()
             .cookie_store(true)
             .max_tls_version(Version::TLS_1_2)
             .build()
@@ -61,15 +61,33 @@ impl DiscordClient {
 #[tokio::test]
 async fn request_builder_test() {
     let client = DiscordClient::new().await;
-    let response = client
-        .send_request(HttpRequest::Get {
-            endpoint: "/users/@me".to_string(),
-            params: None,
-            additional_headers: Some(easy_headers!({"authorization": "token" })),
-        })
-        .await
-        .unwrap();
-    println!("{}", response.text().await.unwrap());
+    for i in 0..20 {
+        let response = client
+            .send_request(HttpRequest::Get {
+                endpoint: "/experiments".to_string(),
+                params: None,
+                additional_headers: Some(easy_headers!({"authorization": "token" })),
+            })
+            .await
+            .unwrap();
+        println!("{}", response.text().await.unwrap());
+    }
 }
+
+
+
+// #[tokio::test]
+// async fn ja3_fingerprint_test() {
+//     let client = DiscordClient::new().await;
+//     let response = client.client.get("https://tools.scrapfly.io/api/tls")
+//         .send()
+//         .await
+//         .unwrap();
+//
+//     println!(
+//         "{}",
+//         from_str::<Value>(&response.text().await.unwrap()).unwrap()["ja3"]
+//     );
+// }
 
 

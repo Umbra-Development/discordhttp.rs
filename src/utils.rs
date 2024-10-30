@@ -170,7 +170,6 @@ pub fn default_headers(user_agent: Option<String>) -> HeaderMap {
 }
 pub async fn experiment_headers(reqwest_client: rquest::Client) -> HeaderMap {
     let headers = default_headers(None);
-    println!("{headers:?}");
     let resp = reqwest_client
         .get("https://discord.com/api/v9/experiments?with_guild_experiments=true")
         .headers(headers.clone())
