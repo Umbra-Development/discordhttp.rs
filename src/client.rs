@@ -28,27 +28,28 @@ pub struct DiscordClient {
 }
 
 impl DiscordClient {
-    pub async fn new() -> DiscordClient {
-        // I have no idea atp, pls fix
+    pub async fn new(proxy: Option<rquest::Proxy>) -> DiscordClient {
         let mut real_headers = default_headers(None);
         let other_headers = experiment_headers(
             rquest::Client::builder()
+                
                 .impersonate_without_headers(Impersonate::Chrome128)
                 .build()
                 .unwrap(),
         )
         .await;
 
-       
-
         merge_headermaps(&mut real_headers, other_headers);
-        let client = rquest::Client::builder()
+
+        let builder = rquest::Client::builder()
             .impersonate_without_headers(Impersonate::Chrome128)
             .default_headers(real_headers)
             .cookie_store(true)
             .use_preconfigured_tls(tls_preconfig())
             .pre_shared_key()
-            .max_tls_version(Version::TLS_1_2)
+            .max_tls_version(Version::TLS_1_2);
+
+        let client = configure_proxy(builder, proxy)
             .build()
             .unwrap();
 
@@ -58,6 +59,16 @@ impl DiscordClient {
         }
     }
 }
+
+fn configure_proxy(builder: rquest::ClientBuilder, proxy: Option<rquest::Proxy>) -> rquest::ClientBuilder {
+    if let Some(proxy) = proxy {
+        builder.proxy(proxy)
+    } else {
+        builder
+    }
+}
+
+
 fn tls_preconfig() -> ImpersonateSettings {
     ImpersonateSettings::builder()
 
@@ -118,9 +129,6 @@ fn tls_preconfig() -> ImpersonateSettings {
             ])
             .build(),
     )
-    .headers(Box::new(|headers| {
-        headers.insert(header::USER_AGENT, HeaderValue::from_static("rquest"));
-    }))
     .build()
 }
 
@@ -136,16 +144,16 @@ impl DiscordClient {
 
 #[tokio::test]
 async fn request_builder_test() {
-    let client = DiscordClient::new().await;
-        let response = client
-            .send_request(HttpRequest::Get {
-                endpoint: "/experiments".to_string(),
-                params: None,
-                additional_headers: Some(easy_headers!({"authorization": "token" })),
-            })
-            .await
-            .unwrap();
-        println!("{}", response.text().await.unwrap());
+    let client = DiscordClient::new( None).await;
+    let response = client
+        .send_request(HttpRequest::Get {
+            endpoint: "/experiments".to_string(),
+            params: None,
+            additional_headers: Some(easy_headers!({"authorization": "token" })),
+        })
+        .await
+        .unwrap();
+    println!("{}", response.text().await.unwrap());
 }
 
 
