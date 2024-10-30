@@ -47,6 +47,7 @@ impl DiscordClient {
             .default_headers(real_headers)
             .cookie_store(true)
             .use_preconfigured_tls(tls_preconfig())
+            .pre_shared_key()
             .max_tls_version(Version::TLS_1_2)
             .build()
             .unwrap();
@@ -66,6 +67,23 @@ fn tls_preconfig() -> ImpersonateSettings {
                 let mut builder = SslConnector::builder(SslMethod::tls_client())?;
                 builder.cert_store();
                 builder.set_curves(&[SslCurve::X25519, SslCurve::SECP256R1, SslCurve::SECP384R1])?;
+                builder.set_cipher_list(&[
+                    "TLS_AES_128_GCM_SHA256",
+                    "TLS_AES_256_GCM_SHA384",
+                    "TLS_CHACHA20_POLY1305_SHA256",
+                    "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+                    "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+                    "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+                    "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
+                    "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
+                    "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
+                    "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256",
+                    "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256",
+                    "TLS_RSA_WITH_AES_128_GCM_SHA256",
+                    "TLS_RSA_WITH_AES_256_GCM_SHA384",
+                    "TLS_RSA_WITH_AES_128_CBC_SHA",
+                    "TLS_RSA_WITH_AES_128_CBC_SHA"
+                ].join(":"))?;
                 
                 Ok(builder)
             }))
@@ -104,7 +122,6 @@ fn tls_preconfig() -> ImpersonateSettings {
         headers.insert(header::USER_AGENT, HeaderValue::from_static("rquest"));
     }))
     .build()
-
 }
 
 
