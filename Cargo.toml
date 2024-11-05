@@ -6,15 +6,11 @@ edition = "2021"
 [dependencies]
 serde = { version = "*", features = ["derive"]}
 serde_json = "*"
-reqwest = {version = "0.11.1", features= ["stream", "__rustls", "rustls-tls-webpki-roots", "__tls", "rustls-tls-native-roots", "native-tls", "json", "http3", "cookies"]} 
 url = "2.5.2"
 base64 = "0.22.1"
 tokio = { version = "1.41.0", features = ["macros", "rt-multi-thread"] }
 randua = "0.1.6"
-rand = "0.8.5"
 regex = "1.11.1"
-rustls = { version = "0.23.15", features = ["tls12", "aws_lc_rs", "fips"] }
-webpki-roots = "0.26.6"
+rquest = { version = "0.26.2", features = ["boring-tls", "cookies", "json"] }
 
-[profile.dev]
-incremental = true
+

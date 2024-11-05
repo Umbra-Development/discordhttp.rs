@@ -1,6 +1,7 @@
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
 use regex::Regex;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use rquest::header::{HeaderMap, HeaderName, HeaderValue};
+
 use std::path::Path;
 use std::string::FromUtf8Error;
 
@@ -167,7 +168,7 @@ pub fn default_headers(user_agent: Option<String>) -> HeaderMap {
         "x-context-properties": context
     })
 }
-pub async fn experiment_headers(reqwest_client: reqwest::Client) -> HeaderMap {
+pub async fn experiment_headers(reqwest_client: rquest::Client) -> HeaderMap {
     let headers = default_headers(None);
     let resp = reqwest_client
         .get("https://discord.com/api/v9/experiments?with_guild_experiments=true")
@@ -186,9 +187,7 @@ pub async fn experiment_headers(reqwest_client: reqwest::Client) -> HeaderMap {
         .collect::<Vec<String>>();
 
     let final_cookie = cookies.join("; ");
-
     let text = resp.text().await.expect("msg");
-
     let result: serde_json::Value = serde_json::from_str(&text).unwrap();
 
     let fingerprint = result["fingerprint"].as_str().unwrap().to_string();
