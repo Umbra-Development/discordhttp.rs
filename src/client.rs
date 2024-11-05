@@ -45,6 +45,7 @@ impl DiscordClient {
         let builder = rquest::Client::builder()
             .default_headers(real_headers)
             .cookie_store(true)
+            // .impersonate(Impersonate::Chrome128)
             .use_preconfigured_tls(tls_preconfig())
             .max_tls_version(Version::TLS_1_2);
 
@@ -78,7 +79,7 @@ fn tls_preconfig() -> ImpersonateSettings {
                 let mut builder = SslConnector::builder(SslMethod::tls_client())?;
                 builder.cert_store();
                 builder.set_curves(&[SslCurve::X25519, SslCurve::SECP256R1, SslCurve::SECP384R1])?;
-                builder.set_alpn_protos(b"\x08http/1.1\x02h2\x03h3")?;
+                // builder.set_alpn_protos(b"\x08http/1.1\x02h2\x03h3")?;
                 builder.set_sigalgs_list(&[ 
                     "ecdsa_secp256r1_sha256",
                     "rsa_pss_rsae_sha256",
