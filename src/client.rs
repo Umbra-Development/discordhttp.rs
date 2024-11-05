@@ -15,9 +15,10 @@ use rquest::{
     header::{HeaderMap, HeaderName, HeaderValue},
     Response,
 };
-use serde_json::{Value, from_str};
+use serde_json::{from_str, json, Value};
 use std::any::Any;
 use std::error::Error;
+use std::io::Read;
 
 pub type Client = DiscordClient;
 
@@ -142,21 +143,63 @@ impl DiscordClient {
     }
 }
 
+// #[tokio::test]
+// async fn request_builder_test() {
+//     let client = DiscordClient::new( None).await;
+//     let response = client
+//         .send_request(HttpRequest::Get {
+//             endpoint: "/experiments".to_string(),
+//             params: None,
+//             additional_headers: Some(easy_headers!({"authorization": "token" })),
+//         })
+//         .await
+//         .unwrap();
+//     println!("{}", response.text().await.unwrap());
+// }
+//
 #[tokio::test]
-async fn request_builder_test() {
-    let client = DiscordClient::new( None).await;
-    let response = client
-        .send_request(HttpRequest::Get {
-            endpoint: "/experiments".to_string(),
-            params: None,
-            additional_headers: Some(easy_headers!({"authorization": "token" })),
-        })
-        .await
+async fn token_join_leave() {
+    let mut tokens = String::new();
+    let mut file = std::fs::File::open("./tokens.txt").unwrap();
+    file.read_to_string(&mut tokens).unwrap();
+    let vals= tokens.split('\n').into_iter();
+    
+    let client = DiscordClient::new(None).await;
+    for val in vals {
+        // Joining a server
+        let resp = client.send_request(
+            HttpRequest::Post {
+                endpoint: "/invites/PuJMXFPm".to_string(),
+                body: Some(json!({"session_id": Value::Null})),
+                additional_headers: Some(easy_headers!({"authorization": val}))
+            }
+        ).await
         .unwrap();
-    println!("{}", response.text().await.unwrap());
+        println!("{}", resp.status().as_str());
+        if resp.status().is_success() {
+            println!("Token has joined the server: {}", val)
+        } else {
+            println!("Token could not join the server: {}\n{}\n{}", val, resp.status().as_str(), resp.text().await.unwrap())
+        }
+
+        // // Leaving a server
+        // let resp = client.send_request(
+        //     HttpRequest::Delete {
+        //         endpoint: "/users/@me/guilds/1299815021794164838".to_string(),
+        //         additional_headers: Some(easy_headers!({"authorization": val})) 
+        //     }
+        // )
+        // .await
+        // .unwrap();
+        // println!("{}", resp.status().as_str());
+        // if resp.status().is_success() {
+        //     println!("Token has left the server: {}", val)
+        // } else {
+        //     println!("Token could not leave the server: {}\n{}\n{}", val, resp.status().as_str(), resp.text().await.unwrap())
+        // }
+
+    }
 }
-
-
 
 // #[tokio::test]
 // async fn ja3_fingerprint_test() {

@@ -3,6 +3,7 @@ use rquest::{
     Client as RequestClient, Method, RequestBuilder,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 
 const ROOT: &str = "https://discord.com/api/v9";
@@ -16,12 +17,12 @@ pub enum HttpRequest {
     },
     Post {
         endpoint: String,
-        body: Option<String>,
+        body: Option<Value>,
         additional_headers: Option<HeaderMap<HeaderValue>>,
     },
     Put {
         endpoint: String,
-        body: Option<String>,
+        body: Option<Value>,
         additional_headers: Option<HeaderMap<HeaderValue>>,
     },
     Delete {
@@ -54,7 +55,7 @@ impl HttpRequest {
             } => {
                 let mut request = client.request(Method::POST, format!("{}{}", ROOT, endpoint));
                 if let Some(body) = body {
-                    request = request.body(body.clone());
+                    request = request.json(body);
                 }
                 if let Some(headers) = additional_headers {
                     request = request.headers(headers.to_owned())
@@ -68,7 +69,7 @@ impl HttpRequest {
             } => {
                 let mut request = client.request(Method::PUT, format!("{}{}", ROOT, endpoint));
                 if let Some(body) = body {
-                    request = request.body(body.clone());
+                    request = request.json(body);
                 }
                 if let Some(headers) = additional_headers {
                     request = request.headers(headers.to_owned())

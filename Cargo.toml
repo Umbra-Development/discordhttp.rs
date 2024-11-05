@@ -13,5 +13,4 @@ randua = "0.1.6"
 regex = "1.11.1"
 rquest = { version = "0.26.2", features = ["boring-tls", "cookies", "json"] }
 
-[profile.dev]
-incremental = true
+
