@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 
 pub struct WebsocketClient {
-    pub client: rquest::WebSocket
+    pub client: rquest::WebSocket,
 }
 impl WebsocketClient {
     pub async fn new(proxy: Option<rquest::Proxy>) -> WebsocketClient {
@@ -61,7 +61,7 @@ impl WebsocketClient {
         // For some reason this takes ownership of self.client
         // So above code replaces client, so it doesn't shit itself here
         let (mut tx, mut rx) = client.split();
-        let (message_tx, mut message_rx) = mpsc::channel(50);
+        let (message_tx, mut message_rx) = mpsc::channel::<Message>(50);
         
         // Task to receive message from mpsc rx to send to ws
         tokio::spawn(async move {
@@ -77,6 +77,7 @@ impl WebsocketClient {
         let heartbeat_tx = message_tx.clone();
         tokio::spawn(async move {
             let mut interval_timer = tokio::time::interval(Duration::from_secs(45));
+            interval_timer.tick().await; // First tick completes immediately
             loop {
                 interval_timer.tick().await;
                 let heartbeat_payload = json!({
@@ -94,41 +95,63 @@ impl WebsocketClient {
             }
         });
 
-        while let Ok(message) = rx.next().await.unwrap() {
-            if let Message::Binary(bytes) = message {
-                println!("{:#?}", bytes);
-                let text = decompress_zlib(String::with_capacity(bytes.len() * 3), &bytes[..]);
-                println!("{text}");
-                let json: Value = serde_json::from_str(&text).unwrap();
-                println!("{}", json);
-                match json["op"].as_i64() {
-                    // HELLO event with heartbeat interval
-                    Some(10) => {
-                        // Send the IDENTIFY payload
-                        let identify_payload = json!({
-                            "op": 2,
-                            "d": {
-                                "token": token,
-                                "properties": {
-                                    "$os": "linux",
-                                    "$browser": "dickcord",
-                                    "$device": "dickcord"
+        // Yes I know the None is unreachable 
+        loop {
+            while let Some(Ok(message)) = rx.next().await {
+                if let Message::Binary(bytes) = message {
+
+                    if let Ok(val) = decompress_zlib(&bytes) {
+                        let json: Value = serde_json::from_str(&val).unwrap();
+                        println!("{} RECEIVED JSON", json);
+                        match json["op"].as_i64() {
+                            // HELLO event with heartbeat interval
+                            Some(10) => {
+                                // Send the IDENTIFY payload
+                                let identify_payload = json!({
+                                    "token": token,
+                                    "properties": {
+                                        "os": "Linux",
+                                        "browser": "Chrome",
+                                        "device": "",
+                                        "system_locale": "en-US",
+                                        "browser_user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                                        "browser_version": "122.0.0.0",
+                                        "os_version": "",
+                                        "referrer": "",
+                                        "referring_domain": "",
+                                        "referrer_current": "",
+                                        "referring_domain_current": "",
+                                        "release_channel": "canary",
+                                        "client_build_number": 342400,
+                                        "client_event_source": null
+                                    },
+                                    "presence": {
+                                        "status": "unknown",
+                                        "since": 0,
+                                        "activities": [],
+                                        "afk": false
+                                    },
+                                    "compress": false,
+                                    "client_state": {
+                                        "guild_versions": {}
+                                    }
+                                });
+                                message_tx
+                                    .send(Message::Text(identify_payload.to_string()))
+                                    .await
+                                    .unwrap();
+                            }
+                            // READY event containing the session_id
+                            Some(0) if json["t"] == "READY" => {
+                                println!("IN READY{:?}", json);
+                                if let Some(session_id) = json["d"]["session_id"].as_str() {
+                                    println!("Session ID: {}", session_id);
+                                    return Some(session_id.to_string());
                                 }
                             }
-                        });
-                        message_tx
-                            .send(Message::Text(identify_payload.to_string()))
-                            .await
-                            .unwrap();
-                    }
-                    // READY event containing the session_id
-                    Some(0) if json["t"] == "READY" => {
-                        if let Some(session_id) = json["d"]["session_id"].as_str() {
-                            println!("Session ID: {}", session_id);
-                            return Some(session_id.to_string());
+                            _ => {}
                         }
                     }
-                    _ => {}
                 }
             }
         }
@@ -207,115 +230,17 @@ impl DiscordClient {
 
 #[tokio::test]
 async fn test_decoder() {
-    let encoded = [120,
-    218,
-    52,
-    201,
-    65,
-    14,
-    130,
-    48,
-    16,
-    5,
-    208,
-    187,
-    252,
-    117,
-    107,
-    90,
-    163,
-    155,
-    185,
-    10,
-    37,
-    100,
-    10,
-    19,
-    37,
-    169,
-    64,
-    218,
-    1,
-    53,
-    77,
-    239,
-    46,
-    27,
-    119,
-    47,
-    121,
-    21,
-    10,
-    90,
-    246,
-    148,
-    12,
-    202,
-    31,
-    235,
-    6,
-    242,
-    206,
-    96,
-    2,
-    85,
-    60,
-    133,
-    179,
-    70,
-    97,
-    29,
-    230,
-    69,
-    37,
-    31,
-    156,
-    64,
-    55,
-    127,
-    189,
-    159,
-    63,
-    104,
-    230,
-    81,
-    64,
-    29,
-    186,
-    128,
-    7,
-    171,
-    188,
-    249,
-    107,
-    183,
-    60,
-    217,
-    189,
-    88,
-    225,
-    162,
-    222,
-    70,
-    27,
-    143,
-    79,
-    9,
-    48,
-    53,
-    224,53,143,121,61,
-    77,238,226,90,
-    143,190,181,31,
-    0,0,0,255,255];
-    println!("HERE {:?}", String::with_capacity(encoded.len() * 3));
-    println!("{:?}", decompress_zlib(String::with_capacity(encoded.len() * 3), &encoded[..]));
+    let encoded = [120, 218, 52, 201, 65, 10, 131, 48, 16, 5, 208, 187, 252, 117, 82, 146, 210, 46, 58, 87, 49, 34, 211, 56, 84, 33, 85, 73, 70, 165, 132, 220, 189, 221, 116, 247, 224, 85, 40, 104, 217, 83, 50, 40, 127, 172, 27, 200, 59, 131, 17, 84, 49, 9, 103, 125, 10, 235, 48, 47, 42, 249, 224, 4, 186, 249, 235, 253, 247, 131, 102, 142, 2, 234, 208, 5, 188, 88, 229, 228, 143, 221, 242, 104, 247, 98, 133, 139, 122, 27, 173, 62, 166, 35, 192, 212, 128, 247, 28, 243, 90, 2, 200, 93, 92, 235, 209, 183, 246, 5, 0, 0, 255, 255];
+    println!("{:?}", decompress_zlib(&encoded).unwrap());
 }
 
 #[tokio::test]
 async fn test_ws() {
     let mut client = WebsocketClient::new(None).await;
-    let id = client.connect_and_identify("test").await;
-    println!("{}", id.unwrap());
+    let id = client.connect_and_identify(
+        "cocken"
+    ).await;
+    println!("{:?}", id);
 }
 
 #[tokio::test]

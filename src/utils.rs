@@ -1,4 +1,5 @@
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
+use flate2::{Decompress, FlushDecompress};
 use regex::Regex;
 use rquest::header::{HeaderMap, HeaderName, HeaderValue};
 
@@ -12,11 +13,13 @@ pub fn encode(s: &str) -> String {
     STANDARD_NO_PAD.encode(s)
 }
 
-pub fn decompress_zlib(mut input: String, bytes: &[u8]) -> String {
-    let mut decoder = flate2::read::ZlibDecoder::new(bytes);
-    let decompressed = Vec::new();
-    decoder.read_to_string(&mut input).unwrap();
-    String::from_utf8(decompressed).unwrap()
+
+pub fn decompress_zlib(bytes: &[u8]) -> std::io::Result<String> {
+    let mut decoder =  flate2::read::ZlibDecoder::new(bytes);
+    let mut decompressed = Vec::new();
+    decoder.read_to_end(&mut decompressed)?;
+    String::from_utf8(decompressed)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
 
