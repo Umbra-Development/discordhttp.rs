@@ -45,9 +45,9 @@ impl DiscordClient {
         let builder = rquest::Client::builder()
             .default_headers(real_headers)
             .cookie_store(true)
-            // .impersonate(Impersonate::Chrome128)
-            .use_preconfigured_tls(tls_preconfig())
-            .max_tls_version(Version::TLS_1_2);
+            .impersonate(Impersonate::Chrome120);
+            // .use_preconfigured_tls(tls_preconfig())
+            // .max_tls_version(Version::TLS_1_2);
 
 
         let client = configure_proxy(builder, proxy)
@@ -229,18 +229,18 @@ async fn get_headers() {
 //     }
 // }
 
-// #[tokio::test]
-// async fn ja3_fingerprint_test() {
-//     let client = DiscordClient::new().await;
-//     let response = client.client.get("https://tools.scrapfly.io/api/tls")
-//         .send()
-//         .await
-//         .unwrap();
-//
-//     println!(
-//         "{}",
-//         from_str::<Value>(&response.text().await.unwrap()).unwrap()["ja3"]
-//     );
-// }
+#[tokio::test]
+async fn ja3_fingerprint_test() {
+    let client = DiscordClient::new(None).await;
+    let response = client.client.get("https://tools.scrapfly.io/api/tls")
+        .send()
+        .await
+        .unwrap();
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&from_str::<Value>(&response.text().await.unwrap()).unwrap()).unwrap()
+    );
+}
 
 
