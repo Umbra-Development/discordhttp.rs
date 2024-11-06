@@ -19,6 +19,36 @@ use std::any::Any;
 use std::error::Error;
 use std::io::Read;
 
+pub struct WebsocketClient {
+    pub client: rquest::WebSocket
+}
+impl WebsocketClient {
+    pub async fn new(proxy: Option<rquest::Proxy>, token: &str) -> WebsocketClient {
+        let mut real_headers = default_headers(None);
+        let other_headers = experiment_headers(
+            rquest::Client::builder()
+                .impersonate_without_headers(Impersonate::Chrome128)
+                .build()
+                .unwrap(),
+        )
+        .await;
+
+        merge_headermaps(&mut real_headers, other_headers);
+
+        let client = rquest::Client::builder()
+            .default_headers(real_headers)
+            .impersonate(Impersonate::Chrome128)
+            .cookie_store(true)
+            .build()
+            .unwrap()
+            .websocket("wss://gateway.discord.gg/?encoding=json&v=9&compress=zlib-stream")
+            .send().await.unwrap();
+
+        println!("{}", client.status());
+        Self { client: client.into_websocket().await.unwrap() }
+    }
+}
+
 pub type Client = DiscordClient;
 
 #[derive(Debug, Clone)]
@@ -66,94 +96,6 @@ fn configure_proxy(
         builder
     }
 }
-
-fn tls_preconfig() -> ImpersonateSettings {
-    ImpersonateSettings::builder()
-        .tls(
-            TlsSettings::builder()
-                .connector(Box::new(|| {
-                    let mut builder = SslConnector::builder(SslMethod::tls_client())?;
-                    builder.cert_store();
-                    builder.set_curves(&[
-                        SslCurve::X25519,
-                        SslCurve::SECP256R1,
-                        SslCurve::SECP384R1,
-                    ])?;
-                    // builder.set_alpn_protos(b"\x08http/1.1\x02h2\x03h3")?;
-                    builder.set_sigalgs_list(
-                        &[
-                            "ecdsa_secp256r1_sha256",
-                            "rsa_pss_rsae_sha256",
-                            "rsa_pkcs1_sha256",
-                            "ecdsa_secp384r1_sha384",
-                            "rsa_pss_rsae_sha384",
-                            "rsa_pkcs1_sha384",
-                            "rsa_pss_rsae_sha512",
-                            "rsa_pkcs1_sha512",
-                        ]
-                        .join(":"),
-                    )?;
-                    builder.set_cipher_list(
-                        &[
-                            "TLS_AES_128_GCM_SHA256",
-                            "TLS_AES_256_GCM_SHA384",
-                            "TLS_CHACHA20_POLY1305_SHA256",
-                            "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
-                            "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
-                            "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
-                            "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
-                            "TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",
-                            "TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",
-                            "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256",
-                            "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256",
-                            "TLS_RSA_WITH_AES_128_GCM_SHA256",
-                            "TLS_RSA_WITH_AES_256_GCM_SHA384",
-                            "TLS_RSA_WITH_AES_128_CBC_SHA",
-                            "TLS_RSA_WITH_AES_128_CBC_SHA",
-                        ]
-                        .join(":"),
-                    )?;
-                    builder.set_grease_enabled(true);
-                    builder.enable_ocsp_stapling();
-                    builder.enable_signed_cert_timestamps();
-                    builder.set_permute_extensions(true);
-
-                    Ok(builder)
-                }))
-                .http_version_pref(HttpVersionPref::Http2)
-                // .application_settings(true) // This gives me 17513 apparently
-                .pre_shared_key(true)
-                .enable_ech_grease(true)
-                .permute_extensions(true)
-                .application_settings(true)
-                .min_tls_version(Version::TLS_1_1)
-                .max_tls_version(Version::TLS_1_3)
-                .build(),
-        )
-        .http2(
-            Http2Settings::builder()
-                .initial_stream_window_size(6291456)
-                .initial_connection_window_size(15728640)
-                .max_header_list_size(262144)
-                .header_table_size(65536)
-                .enable_push(false)
-                .headers_priority((0, 255, true))
-                .headers_pseudo_order([Method, Authority, Scheme, Path])
-                .settings_order(&[
-                    HeaderTableSize,
-                    EnablePush,
-                    MaxConcurrentStreams,
-                    InitialWindowSize,
-                    MaxFrameSize,
-                    MaxHeaderListSize,
-                    UnknownSetting8,
-                    UnknownSetting9,
-                ])
-                .build(),
-        )
-        .build()
-}
-
 impl DiscordClient {
     pub async fn send_request(&self, request: HttpRequest) -> Result<Response, Box<dyn Error>> {
         let builder = request.to_request_builder(&self.client);
@@ -174,20 +116,13 @@ impl DiscordClient {
     }
 }
 
-// #[tokio::test]
-// async fn request_builder_test() {
-//     let client = DiscordClient::new( None).await;
-//     let response = client
-//         .send_request(HttpRequest::Get {
-//             endpoint: "/experiments".to_string(),
-//             params: None,
-//             additional_headers: Some(easy_headers!({"authorization": "token" })),
-//         })
-//         .await
-//         .unwrap();
-//     println!("{}", response.text().await.unwrap());
-// }
-//
+
+
+#[tokio::test]
+async fn test_ws() {
+    let client = WebsocketClient::new(None, "abcd");
+}
+
 #[tokio::test]
 async fn get_headers() {
     let client = DiscordClient::new(None).await;
