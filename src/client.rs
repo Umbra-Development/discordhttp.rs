@@ -1,11 +1,14 @@
 #![allow(unused_imports)]
 use crate::easy_headers;
+use tokio::sync::mpsc;
+use tokio::time::Duration;
+use futures_util::{SinkExt, StreamExt};
 use crate::types::HttpRequest;
 use crate::utils::{default_headers, experiment_headers, merge_headermaps};
 use jsonwebtoken::{encode, EncodingKey, Header};
 use rquest::boring::ssl::{SslConnector, SslCurve, SslMethod, SslOptions, SslVersion};
 // Required for macro idfk why
-use rquest::{header, HttpVersionPref};
+use rquest::{header, HttpVersionPref, Message};
 use rquest::{PseudoOrder::*, SettingsOrder::*};
 
 use rquest::tls::{chrome, Http2Settings, Impersonate, ImpersonateSettings, TlsSettings, Version};
@@ -18,12 +21,20 @@ use serde_json::{from_str, json, Value};
 use std::any::Any;
 use std::error::Error;
 use std::io::Read;
+use std::sync::Arc;
+
+fn decompress_zlib(input: &[u8]) -> String {
+    let mut decoder = flate2::read::ZlibDecoder::new(input);
+    let mut decompressed = Vec::new();
+    decoder.read_to_end(&mut decompressed).unwrap();
+    String::from_utf8(decompressed).unwrap()
+}
 
 pub struct WebsocketClient {
     pub client: rquest::WebSocket
 }
 impl WebsocketClient {
-    pub async fn new(proxy: Option<rquest::Proxy>, token: &str) -> WebsocketClient {
+    pub async fn new(proxy: Option<rquest::Proxy>) -> WebsocketClient {
         let mut real_headers = default_headers(None);
         let other_headers = experiment_headers(
             rquest::Client::builder()
@@ -36,17 +47,100 @@ impl WebsocketClient {
         merge_headermaps(&mut real_headers, other_headers);
 
         let client = rquest::Client::builder()
-            .default_headers(real_headers)
             .impersonate(Impersonate::Chrome128)
             .cookie_store(true)
             .build()
             .unwrap()
             .websocket("wss://gateway.discord.gg/?encoding=json&v=9&compress=zlib-stream")
             .send().await.unwrap();
-
-        println!("{}", client.status());
         Self { client: client.into_websocket().await.unwrap() }
     }
+
+    pub async fn connect_and_identify(&mut self, token: &str) -> Option<String> {
+        let client = std::mem::replace(&mut self.client,
+            rquest::Client::builder()
+            .impersonate(Impersonate::Chrome128)
+            .cookie_store(true)
+            .build()
+            .unwrap()
+            .websocket("wss://gateway.discord.gg/?encoding=json&v=9&compress=zlib-stream")
+            .send().await.unwrap().into_websocket().await.unwrap());
+        // For some reason this takes ownership of self.client
+        // So above code replaces client, so it doesn't shit itself here
+        let (mut tx, mut rx) = client.split();
+        let (message_tx, mut message_rx) = mpsc::channel(50);
+        
+        // Task to receive message from mpsc rx to send to ws
+        tokio::spawn(async move {
+            while let Some(msg) = message_rx.recv().await {
+                println!("Sending: {msg:?}");
+                if let Err(e) = tx.send(msg).await {
+                    eprintln!("Failed to send message: {}", e);
+                    break;
+                }
+            }
+        });
+
+        let heartbeat_tx = message_tx.clone();
+        tokio::spawn(async move {
+            let mut interval_timer = tokio::time::interval(Duration::from_secs(45));
+            loop {
+                interval_timer.tick().await;
+                let heartbeat_payload = json!({
+                    "op": 1,
+                    "d": null // or the last sequence number if keeping track
+                });
+                if heartbeat_tx
+                    .send(Message::Text(heartbeat_payload.to_string()))
+                    .await
+                    .is_err()
+                {
+                    eprintln!("Failed to send heartbeat");
+                    break;
+                }
+            }
+        });
+
+        while let Ok(message) = rx.next().await.unwrap() {
+            if let Message::Binary(bytes) = message {
+                let text = decompress_zlib(&bytes);
+                let json: Value = serde_json::from_str(&text).unwrap();
+                println!("{}", json);
+                match json["op"].as_i64() {
+                    // HELLO event with heartbeat interval
+                    Some(10) => {
+                        // Send the IDENTIFY payload
+                        let identify_payload = json!({
+                            "op": 2,
+                            "d": {
+                                "token": token,
+                                "properties": {
+                                    "$os": "linux",
+                                    "$browser": "dickcord",
+                                    "$device": "dickcord"
+                                }
+                            }
+                        });
+                        message_tx
+                            .send(Message::Text(identify_payload.to_string()))
+                            .await
+                            .unwrap();
+                    }
+                    // READY event containing the session_id
+                    Some(0) if json["t"] == "READY" => {
+                        if let Some(session_id) = json["d"]["session_id"].as_str() {
+                            println!("Session ID: {}", session_id);
+                            return Some(session_id.to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        None
+    }
+
 }
 
 pub type Client = DiscordClient;
@@ -120,7 +214,9 @@ impl DiscordClient {
 
 #[tokio::test]
 async fn test_ws() {
-    let client = WebsocketClient::new(None, "abcd");
+    let mut client = WebsocketClient::new(None).await;
+    let id = client.connect_and_identify("test").await;
+    println!("{}", id.unwrap());
 }
 
 #[tokio::test]
