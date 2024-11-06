@@ -6,10 +6,19 @@ use std::path::Path;
 use std::string::FromUtf8Error;
 
 use crate::types::SuperProperties;
+use std::io::Read;
 
 pub fn encode(s: &str) -> String {
     STANDARD_NO_PAD.encode(s)
 }
+
+pub fn decompress_zlib(mut input: String, bytes: &[u8]) -> String {
+    let mut decoder = flate2::read::ZlibDecoder::new(bytes);
+    let decompressed = Vec::new();
+    decoder.read_to_string(&mut input).unwrap();
+    String::from_utf8(decompressed).unwrap()
+}
+
 
 #[macro_export]
 macro_rules! easy_headers {

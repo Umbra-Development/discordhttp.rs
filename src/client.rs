@@ -4,7 +4,7 @@ use tokio::sync::mpsc;
 use tokio::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use crate::types::HttpRequest;
-use crate::utils::{default_headers, experiment_headers, merge_headermaps};
+use crate::utils::{default_headers, experiment_headers, merge_headermaps, decompress_zlib};
 use jsonwebtoken::{encode, EncodingKey, Header};
 use rquest::boring::ssl::{SslConnector, SslCurve, SslMethod, SslOptions, SslVersion};
 // Required for macro idfk why
@@ -23,12 +23,6 @@ use std::error::Error;
 use std::io::Read;
 use std::sync::Arc;
 
-fn decompress_zlib(input: &[u8]) -> String {
-    let mut decoder = flate2::read::ZlibDecoder::new(input);
-    let mut decompressed = Vec::new();
-    decoder.read_to_end(&mut decompressed).unwrap();
-    String::from_utf8(decompressed).unwrap()
-}
 
 pub struct WebsocketClient {
     pub client: rquest::WebSocket
@@ -46,14 +40,13 @@ impl WebsocketClient {
 
         merge_headermaps(&mut real_headers, other_headers);
 
-        let client = rquest::Client::builder()
+        let builder = rquest::Client::builder()
             .impersonate(Impersonate::Chrome128)
-            .cookie_store(true)
-            .build()
-            .unwrap()
+            .cookie_store(true); 
+        let ws = configure_proxy(builder, proxy).build().unwrap()
             .websocket("wss://gateway.discord.gg/?encoding=json&v=9&compress=zlib-stream")
             .send().await.unwrap();
-        Self { client: client.into_websocket().await.unwrap() }
+        Self { client: ws.into_websocket().await.unwrap() }
     }
 
     pub async fn connect_and_identify(&mut self, token: &str) -> Option<String> {
@@ -103,7 +96,9 @@ impl WebsocketClient {
 
         while let Ok(message) = rx.next().await.unwrap() {
             if let Message::Binary(bytes) = message {
-                let text = decompress_zlib(&bytes);
+                println!("{:#?}", bytes);
+                let text = decompress_zlib(String::with_capacity(bytes.len() * 3), &bytes[..]);
+                println!("{text}");
                 let json: Value = serde_json::from_str(&text).unwrap();
                 println!("{}", json);
                 match json["op"].as_i64() {
@@ -210,7 +205,111 @@ impl DiscordClient {
     }
 }
 
-
+#[tokio::test]
+async fn test_decoder() {
+    let encoded = [120,
+    218,
+    52,
+    201,
+    65,
+    14,
+    130,
+    48,
+    16,
+    5,
+    208,
+    187,
+    252,
+    117,
+    107,
+    90,
+    163,
+    155,
+    185,
+    10,
+    37,
+    100,
+    10,
+    19,
+    37,
+    169,
+    64,
+    218,
+    1,
+    53,
+    77,
+    239,
+    46,
+    27,
+    119,
+    47,
+    121,
+    21,
+    10,
+    90,
+    246,
+    148,
+    12,
+    202,
+    31,
+    235,
+    6,
+    242,
+    206,
+    96,
+    2,
+    85,
+    60,
+    133,
+    179,
+    70,
+    97,
+    29,
+    230,
+    69,
+    37,
+    31,
+    156,
+    64,
+    55,
+    127,
+    189,
+    159,
+    63,
+    104,
+    230,
+    81,
+    64,
+    29,
+    186,
+    128,
+    7,
+    171,
+    188,
+    249,
+    107,
+    183,
+    60,
+    217,
+    189,
+    88,
+    225,
+    162,
+    222,
+    70,
+    27,
+    143,
+    79,
+    9,
+    48,
+    53,
+    224,53,143,121,61,
+    77,238,226,90,
+    143,190,181,31,
+    0,0,0,255,255];
+    println!("HERE {:?}", String::with_capacity(encoded.len() * 3));
+    println!("{:?}", decompress_zlib(String::with_capacity(encoded.len() * 3), &encoded[..]));
+}
 
 #[tokio::test]
 async fn test_ws() {
