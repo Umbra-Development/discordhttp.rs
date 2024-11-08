@@ -14,5 +14,7 @@ regex = "1.11.1"
 rquest = { version = "0.26.2", features = ["boring-tls", "cookies", "json", "websocket"] }
 jsonwebtoken = "9.3.0"
 futures = "0.3.31"
+futures-util = "0.3.31"
+flate2 = { version = "1.0.34", features = ["zlib"] }
 
 

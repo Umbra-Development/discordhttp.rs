@@ -1,12 +1,14 @@
 #![allow(unused_imports)]
 use crate::{easy_headers, easy_params};
+use tokio::sync::mpsc;
+use tokio::time::Duration;
+use futures_util::{SinkExt, StreamExt};
 use crate::types::HttpRequest;
-use crate::utils::{default_headers, experiment_headers, merge_headermaps};
-use futures::StreamExt;
+use crate::utils::{default_headers, experiment_headers, merge_headermaps, decompress_zlib};
 use jsonwebtoken::{encode, EncodingKey, Header};
 use rquest::boring::ssl::{SslConnector, SslCurve, SslMethod, SslOptions, SslVersion};
 // Required for macro idfk why
-use rquest::{header, HttpVersionPref};
+use rquest::{header, HttpVersionPref, Message};
 use rquest::{PseudoOrder::*, SettingsOrder::*};
 
 use rquest::tls::{chrome, Http2Settings, Impersonate, ImpersonateSettings, TlsSettings, Version};
@@ -19,12 +21,14 @@ use serde_json::{from_str, json, Value};
 use std::any::Any;
 use std::error::Error;
 use std::io::Read;
+use std::sync::Arc;
+
 
 pub struct WebsocketClient {
-    pub client: rquest::WebSocket
+    pub client: rquest::WebSocket,
 }
 impl WebsocketClient {
-    pub async fn new(proxy: Option<rquest::Proxy>, token: &str) -> WebsocketClient {
+    pub async fn new(proxy: Option<rquest::Proxy>) -> WebsocketClient {
         let mut real_headers = default_headers(None);
         let other_headers = experiment_headers(
             rquest::Client::builder()
@@ -36,18 +40,125 @@ impl WebsocketClient {
 
         merge_headermaps(&mut real_headers, other_headers);
 
-        let client = rquest::Client::builder()
-            .default_headers(real_headers)
+        let builder = rquest::Client::builder()
+            .impersonate(Impersonate::Chrome128)
+            .cookie_store(true); 
+        let ws = configure_proxy(builder, proxy).build().unwrap()
+            .websocket("wss://gateway.discord.gg/?encoding=json&v=9&compress=zlib-stream")
+            .send().await.unwrap();
+        Self { client: ws.into_websocket().await.unwrap() }
+    }
+
+    pub async fn connect_and_identify(&mut self, token: &str) -> Option<String> {
+        let client = std::mem::replace(&mut self.client,
+            rquest::Client::builder()
             .impersonate(Impersonate::Chrome128)
             .cookie_store(true)
             .build()
             .unwrap()
             .websocket("wss://gateway.discord.gg/?encoding=json&v=9&compress=zlib-stream")
-            .send().await.unwrap();
+            .send().await.unwrap().into_websocket().await.unwrap());
+        // For some reason this takes ownership of self.client
+        // So above code replaces client, so it doesn't shit itself here
+        let (mut tx, mut rx) = client.split();
+        let (message_tx, mut message_rx) = mpsc::channel::<Message>(50);
+        
+        // Task to receive message from mpsc rx to send to ws
+        tokio::spawn(async move {
+            while let Some(msg) = message_rx.recv().await {
+                println!("Sending: {msg:?}");
+                if let Err(e) = tx.send(msg).await {
+                    eprintln!("Failed to send message: {}", e);
+                    break;
+                }
+            }
+        });
 
-        println!("{}", client.status());
-        Self { client: client.into_websocket().await.unwrap() }
+        let heartbeat_tx = message_tx.clone();
+        tokio::spawn(async move {
+            let mut interval_timer = tokio::time::interval(Duration::from_secs(45));
+            interval_timer.tick().await; // First tick completes immediately
+            loop {
+                interval_timer.tick().await;
+                let heartbeat_payload = json!({
+                    "op": 1,
+                    "d": null // or the last sequence number if keeping track
+                });
+                if heartbeat_tx
+                    .send(Message::Text(heartbeat_payload.to_string()))
+                    .await
+                    .is_err()
+                {
+                    eprintln!("Failed to send heartbeat");
+                    break;
+                }
+            }
+        });
+
+        // Yes I know the None is unreachable 
+        loop {
+            while let Some(Ok(message)) = rx.next().await {
+                if let Message::Binary(bytes) = message {
+
+                    if let Ok(val) = decompress_zlib(&bytes) {
+                        let json: Value = serde_json::from_str(&val).unwrap();
+                        println!("{} RECEIVED JSON", json);
+                        match json["op"].as_i64() {
+                            // HELLO event with heartbeat interval
+                            Some(10) => {
+                                // Send the IDENTIFY payload
+                                let identify_payload = json!({
+                                    "token": token,
+                                    "properties": {
+                                        "os": "Linux",
+                                        "browser": "Chrome",
+                                        "device": "",
+                                        "system_locale": "en-US",
+                                        "browser_user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                                        "browser_version": "122.0.0.0",
+                                        "os_version": "",
+                                        "referrer": "",
+                                        "referring_domain": "",
+                                        "referrer_current": "",
+                                        "referring_domain_current": "",
+                                        "release_channel": "canary",
+                                        "client_build_number": 342400,
+                                        "client_event_source": null
+                                    },
+                                    "presence": {
+                                        "status": "unknown",
+                                        "since": 0,
+                                        "activities": [],
+                                        "afk": false
+                                    },
+                                    "compress": false,
+                                    "client_state": {
+                                        "guild_versions": {}
+                                    }
+                                });
+                                message_tx
+                                    .send(Message::Text(identify_payload.to_string()))
+                                    .await
+                                    .unwrap();
+                            }
+                            // READY event containing the session_id
+                            Some(0) if json["t"] == "READY" => {
+                                println!("IN READY{:?}", json);
+                                if let Some(session_id) = json["d"]["session_id"].as_str() {
+                                    println!("Session ID: {}", session_id);
+                                    return Some(session_id.to_string());
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        None
     }
+
 }
 
 pub type Client = DiscordClient;
@@ -117,11 +228,19 @@ impl DiscordClient {
     }
 }
 
-
+#[tokio::test]
+async fn test_decoder() {
+    let encoded = [120, 218, 52, 201, 65, 10, 131, 48, 16, 5, 208, 187, 252, 117, 82, 146, 210, 46, 58, 87, 49, 34, 211, 56, 84, 33, 85, 73, 70, 165, 132, 220, 189, 221, 116, 247, 224, 85, 40, 104, 217, 83, 50, 40, 127, 172, 27, 200, 59, 131, 17, 84, 49, 9, 103, 125, 10, 235, 48, 47, 42, 249, 224, 4, 186, 249, 235, 253, 247, 131, 102, 142, 2, 234, 208, 5, 188, 88, 229, 228, 143, 221, 242, 104, 247, 98, 133, 139, 122, 27, 173, 62, 166, 35, 192, 212, 128, 247, 28, 243, 90, 2, 200, 93, 92, 235, 209, 183, 246, 5, 0, 0, 255, 255];
+    println!("{:?}", decompress_zlib(&encoded).unwrap());
+}
 
 #[tokio::test]
 async fn test_ws() {
-    let client = WebsocketClient::new(None, "abcd");
+    let mut client = WebsocketClient::new(None).await;
+    let id = client.connect_and_identify(
+        "cocken"
+    ).await;
+    println!("{:?}", id);
 }
 
 #[tokio::test]
