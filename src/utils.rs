@@ -1,28 +1,55 @@
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
 use flate2::{Decompress, FlushDecompress};
+use futures::SinkExt;
 use regex::Regex;
 use rquest::header::{HeaderMap, HeaderName, HeaderValue};
 
 
-use std::path::Path;
+use std::{io::ErrorKind, path::Path};
 use std::string::FromUtf8Error;
 
 use crate::types::SuperProperties;
-use std::io::Read;
+use std::io::{self, Read};
 
 pub fn encode(s: &str) -> String {
     STANDARD_NO_PAD.encode(s)
 }
 
 
-pub fn decompress_zlib(bytes: &[u8]) -> std::io::Result<String> {
-    let mut decoder =  flate2::read::ZlibDecoder::new(bytes);
-    let mut decompressed = Vec::new();
-    decoder.read_to_end(&mut decompressed)?;
-    String::from_utf8(decompressed)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+
+pub struct ZlibStreamDecompressor {
+    decompressor: Decompress,
+    buffer: Vec<u8>, // Buffer to store decompressed data
+    last_out: usize, // Last index of valid decompressed data in `self.buffer`
 }
 
+impl ZlibStreamDecompressor {
+    pub fn new(buffer_size: usize) -> Self {
+        Self {
+            decompressor: Decompress::new(true),
+            buffer: vec![0; buffer_size],
+            last_out: 0
+        }
+    }
+
+    pub fn decompress(&mut self, bytes: &[u8]) -> io::Result<String> {
+        match self
+            .decompressor
+            .decompress(bytes, &mut self.buffer, FlushDecompress::Sync)
+        {
+            Ok(status) => {
+                // Append only the valid part of the decompressed data to `self.buffer`
+                let bytes_written = self.decompressor.total_out() as usize;
+                let diff = bytes_written - self.last_out;
+                let decompressed_chunk = &self.buffer[..diff];
+                self.last_out = bytes_written;
+
+                Ok(std::str::from_utf8(&decompressed_chunk).unwrap().to_string())
+            }
+            Err(e) => Err(io::Error::new(ErrorKind::InvalidData, e)),
+        }
+    }
+}
 
 #[macro_export]
 macro_rules! easy_headers {

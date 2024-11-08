@@ -1,14 +1,18 @@
 #![allow(unused_imports)]
-use crate::{easy_headers, easy_params};
-use tokio::sync::mpsc;
-use tokio::time::Duration;
-use futures_util::{SinkExt, StreamExt};
 use crate::types::HttpRequest;
-use crate::utils::{default_headers, experiment_headers, merge_headermaps, decompress_zlib};
+use crate::utils::{default_headers, experiment_headers, merge_headermaps, ZlibStreamDecompressor};
+use crate::{easy_headers, easy_params};
+use flate2::write::{GzEncoder, ZlibEncoder};
+use flate2::Compression;
+use futures::lock::Mutex;
+use futures::stream::{SplitSink, SplitStream};
+use futures_util::{SinkExt, StreamExt};
 use jsonwebtoken::{encode, EncodingKey, Header};
 use rquest::boring::ssl::{SslConnector, SslCurve, SslMethod, SslOptions, SslVersion};
+use tokio::sync::mpsc;
+use tokio::time::Duration;
 // Required for macro idfk why
-use rquest::{header, HttpVersionPref, Message};
+use rquest::{header, HttpVersionPref, Message, WebSocket};
 use rquest::{PseudoOrder::*, SettingsOrder::*};
 
 use rquest::tls::{chrome, Http2Settings, Impersonate, ImpersonateSettings, TlsSettings, Version};
@@ -20,145 +24,206 @@ use serde::Serialize;
 use serde_json::{from_str, json, Value};
 use std::any::Any;
 use std::error::Error;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::sync::Arc;
 
-
-pub struct WebsocketClient {
-    pub client: rquest::WebSocket,
+pub struct WebsocketClientBuilder {
+    hb_only: bool,
+    proxy: Option<rquest::Proxy>,
+    token: Option<String>,
+    buffer_size: usize,
 }
-impl WebsocketClient {
-    pub async fn new(proxy: Option<rquest::Proxy>) -> WebsocketClient {
-        let mut real_headers = default_headers(None);
-        let other_headers = experiment_headers(
-            rquest::Client::builder()
-                .impersonate_without_headers(Impersonate::Chrome128)
-                .build()
-                .unwrap(),
-        )
-        .await;
 
-        merge_headermaps(&mut real_headers, other_headers);
+impl WebsocketClientBuilder {
+    fn new() -> WebsocketClientBuilder {
+        WebsocketClientBuilder {
+            hb_only: false,
+            proxy: None,
+            token: None,
+            buffer_size: 2 << 22,
+        }
+    }
+
+    fn proxy(mut self, proxy: rquest::Proxy) -> WebsocketClientBuilder {
+        self.proxy = Some(proxy);
+        self
+    }
+
+    fn token<T: Into<String>>(mut self, token: T) -> WebsocketClientBuilder {
+        self.token = Some(token.into());
+        self
+    }
+
+    fn buffer_size(mut self, buffer_size: usize) -> WebsocketClientBuilder {
+        self.buffer_size = buffer_size;
+        self
+    }
+
+    fn hb_only(mut self, hb_only: bool) -> WebsocketClientBuilder {
+        self.hb_only = hb_only;
+        self
+    }
+
+    async fn connect(self, other_headers: Option<HeaderMap>) -> Arc<WebsocketClient> {
+        let mut real_headers = default_headers(None);
+
+        if let Some(other_headers) = other_headers {
+            merge_headermaps(&mut real_headers, other_headers);
+        }
 
         let builder = rquest::Client::builder()
             .impersonate(Impersonate::Chrome128)
-            .cookie_store(true); 
-        let ws = configure_proxy(builder, proxy).build().unwrap()
-            .websocket("wss://gateway.discord.gg/?encoding=json&v=9&compress=zlib-stream")
-            .send().await.unwrap();
-        Self { client: ws.into_websocket().await.unwrap() }
-    }
-
-    pub async fn connect_and_identify(&mut self, token: &str) -> Option<String> {
-        let client = std::mem::replace(&mut self.client,
-            rquest::Client::builder()
-            .impersonate(Impersonate::Chrome128)
-            .cookie_store(true)
+            .cookie_store(true);
+        let req = configure_proxy(builder, self.proxy)
             .build()
             .unwrap()
             .websocket("wss://gateway.discord.gg/?encoding=json&v=9&compress=zlib-stream")
-            .send().await.unwrap().into_websocket().await.unwrap());
-        // For some reason this takes ownership of self.client
-        // So above code replaces client, so it doesn't shit itself here
-        let (mut tx, mut rx) = client.split();
-        let (message_tx, mut message_rx) = mpsc::channel::<Message>(50);
-        
-        // Task to receive message from mpsc rx to send to ws
+            .send()
+            .await
+            .unwrap();
+
+        let ws = req.into_websocket().await.unwrap();
+        let (tx, rx) = ws.split();
+
+        let (message_tx, message_rx) = mpsc::channel::<Message>(50);
+
+        let client = WebsocketClient {
+            message_tx: Mutex::new(message_tx),
+            message_rx: Mutex::new(message_rx),
+            token: self.token.expect("No token provided"),
+            session_id: Mutex::new(None),
+        };
+
+        let wrapped = Arc::new(client);
+        let wrapped1 = wrapped.clone();
+        let wrapped2 = wrapped.clone();
+
+        wrapped2.start_sending(tx);
+        if self.hb_only {
+            wrapped1.send_off_init().await;
+        } else {
+            wrapped1.start_receiving(rx, self.buffer_size);
+        }
+
+        wrapped
+    }
+}
+
+pub struct WebsocketClient {
+    message_tx: Mutex<mpsc::Sender<Message>>,
+    message_rx: Mutex<mpsc::Receiver<Message>>,
+    token: String,
+    session_id: Mutex<Option<String>>,
+}
+
+impl WebsocketClient {
+    pub fn builder() -> WebsocketClientBuilder {
+        WebsocketClientBuilder::new()
+    }
+
+    fn start_sending(self: Arc<Self>, mut tx: SplitSink<WebSocket, Message>) {
+        // let message_rx = Arc::clone(&self.message_rx);
+
         tokio::spawn(async move {
+            let mut message_rx = self.message_rx.lock().await;
             while let Some(msg) = message_rx.recv().await {
-                println!("Sending: {msg:?}");
-                if let Err(e) = tx.send(msg).await {
-                    eprintln!("Failed to send message: {}", e);
+                // println!("Sending: {}", msg.json::<Value>().unwrap());
+                if tx.send(msg).await.is_err() {
+                    eprintln!("Failed to send message");
                     break;
                 }
             }
         });
+    }
 
-        let heartbeat_tx = message_tx.clone();
+    fn start_receiving(self: Arc<Self>, mut rx: SplitStream<WebSocket>, buffer_size: usize) {
+        let mut decompressor = ZlibStreamDecompressor::new(buffer_size);
+
         tokio::spawn(async move {
-            let mut interval_timer = tokio::time::interval(Duration::from_secs(45));
-            interval_timer.tick().await; // First tick completes immediately
-            loop {
-                interval_timer.tick().await;
-                let heartbeat_payload = json!({
-                    "op": 1,
-                    "d": null // or the last sequence number if keeping track
-                });
-                if heartbeat_tx
-                    .send(Message::Text(heartbeat_payload.to_string()))
-                    .await
-                    .is_err()
-                {
-                    eprintln!("Failed to send heartbeat");
-                    break;
-                }
-            }
-        });
-
-        // Yes I know the None is unreachable 
-        loop {
             while let Some(Ok(message)) = rx.next().await {
-                if let Message::Binary(bytes) = message {
-
-                    if let Ok(val) = decompress_zlib(&bytes) {
-                        let json: Value = serde_json::from_str(&val).unwrap();
-                        println!("{} RECEIVED JSON", json);
-                        match json["op"].as_i64() {
-                            // HELLO event with heartbeat interval
-                            Some(10) => {
-                                // Send the IDENTIFY payload
-                                let identify_payload = json!({
-                                    "token": token,
-                                    "properties": {
-                                        "os": "Linux",
-                                        "browser": "Chrome",
-                                        "device": "",
-                                        "system_locale": "en-US",
-                                        "browser_user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                                        "browser_version": "122.0.0.0",
-                                        "os_version": "",
-                                        "referrer": "",
-                                        "referring_domain": "",
-                                        "referrer_current": "",
-                                        "referring_domain_current": "",
-                                        "release_channel": "canary",
-                                        "client_build_number": 342400,
-                                        "client_event_source": null
-                                    },
-                                    "presence": {
-                                        "status": "unknown",
-                                        "since": 0,
-                                        "activities": [],
-                                        "afk": false
-                                    },
-                                    "compress": false,
-                                    "client_state": {
-                                        "guild_versions": {}
-                                    }
-                                });
-                                message_tx
-                                    .send(Message::Text(identify_payload.to_string()))
-                                    .await
-                                    .unwrap();
-                            }
-                            // READY event containing the session_id
-                            Some(0) if json["t"] == "READY" => {
-                                println!("IN READY{:?}", json);
-                                if let Some(session_id) = json["d"]["session_id"].as_str() {
-                                    println!("Session ID: {}", session_id);
-                                    return Some(session_id.to_string());
-                                }
-                            }
-                            _ => {}
+                match message {
+                    Message::Binary(bytes) => match decompressor.decompress(&bytes) {
+                        Ok(dcmp_str) => {
+                            let json = serde_json::from_str::<Value>(&dcmp_str).unwrap();
+                            self.handle_message(&json).await;
                         }
+                        Err(why) => eprintln!("Failed to decompress binary: {}", why),
+                    },
+                    Message::Close { code, reason } => {
+                        eprintln!("Connection closed: {} - {:?}", code, reason);
+                        break;
+                    }
+                    _ => {
+                        eprintln!("Received message: {:?}", message);
                     }
                 }
             }
-        }
-
-        None
+        });
     }
 
+    pub async fn send_off_init(&self) {
+        let identify_payload = json!({
+            "op": 2,
+            "d": {
+                "token": self.token,
+                "capabilities": 30717,
+                "properties": {
+                    "os": "Linux",
+                    "browser": "Chrome",
+                    "device": "",
+                    "system_locale": "en-US",
+                    "browser_user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+                    "browser_version": "126.0.0.0",
+                    "os_version": "",
+                    "referrer": "",
+                    "referring_domain": "",
+                    "referrer_current": "",
+                    "referring_domain_current": "",
+                    "release_channel": "canary",
+                    "client_build_number": 342931,
+                    "client_event_source": null
+                },
+                "presence": {
+                    "status": "unknown",
+                    "since": 0,
+                    "activities": [],
+                    "afk": false
+                },
+                "compress": false,
+                "client_state": {
+                    "guild_versions": {}
+                }
+            }
+        });
+
+        let tx = self.message_tx.lock().await;
+        if tx
+            .send(Message::Text(
+                serde_json::to_string(&identify_payload).unwrap(),
+            ))
+            .await
+            .is_err()
+        {
+            eprintln!("Failed to send IDENTIFY");
+        }
+    }
+
+    pub async fn handle_message(&self, json: &Value) {
+        println!("Received decoded binary: {:?}", json);
+        match json["op"].as_i64() {
+            Some(10) => {
+                // HELLO event
+                self.send_off_init().await;
+            }
+            Some(0) if json["t"] == "READY" => {
+                if let Some(session_id) = json["d"]["session_id"].as_str() {
+                    let mut session_id_lock = self.session_id.lock().await;
+                    *session_id_lock = Some(session_id.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 pub type Client = DiscordClient;
@@ -229,18 +294,41 @@ impl DiscordClient {
 }
 
 #[tokio::test]
-async fn test_decoder() {
-    let encoded = [120, 218, 52, 201, 65, 10, 131, 48, 16, 5, 208, 187, 252, 117, 82, 146, 210, 46, 58, 87, 49, 34, 211, 56, 84, 33, 85, 73, 70, 165, 132, 220, 189, 221, 116, 247, 224, 85, 40, 104, 217, 83, 50, 40, 127, 172, 27, 200, 59, 131, 17, 84, 49, 9, 103, 125, 10, 235, 48, 47, 42, 249, 224, 4, 186, 249, 235, 253, 247, 131, 102, 142, 2, 234, 208, 5, 188, 88, 229, 228, 143, 221, 242, 104, 247, 98, 133, 139, 122, 27, 173, 62, 166, 35, 192, 212, 128, 247, 28, 243, 90, 2, 200, 93, 92, 235, 209, 183, 246, 5, 0, 0, 255, 255];
-    println!("{:?}", decompress_zlib(&encoded).unwrap());
-}
+async fn test_discord_ws() {
+    let mut tokens = String::new();
+    let mut file = std::fs::File::open("./auth_tokens.txt").unwrap();
+    file.read_to_string(&mut tokens).unwrap();
+    let token = tokens
+        .split("\n")
+        .into_iter()
+        .next()
+        .expect("No tokens in file.");
 
-#[tokio::test]
-async fn test_ws() {
-    let mut client = WebsocketClient::new(None).await;
-    let id = client.connect_and_identify(
-        "cocken"
-    ).await;
-    println!("{:?}", id);
+    let other_headers = experiment_headers(
+        rquest::Client::builder()
+            .impersonate_without_headers(Impersonate::Chrome128)
+            .build()
+            .unwrap(),
+    )
+    .await;
+
+    let client = WebsocketClient::builder()
+        .token(token)
+        .connect(Some(other_headers))
+        .await;
+
+    // wait until session id is set
+
+    loop {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        if let Some(session_id) = client.session_id.lock().await.clone() {
+            println!("Session ID: {}", session_id);
+            break;
+        }
+    }
+
+    // let id = client.connect_and_identify(token, true).await;
+    // println!("{:?}", id);
 }
 
 #[tokio::test]
@@ -253,12 +341,11 @@ async fn get_headers() {
     }
 }
 
-
 #[tokio::test]
 async fn token_join_leave() {
     const AMT: usize = 3;
     const COOKIE: &'static str = "__dcfduid=9b0e5a9096de11efbaea092ef1a07225; __sdcfduid=9b0e5a9196de11efbaea092ef1a072257d00d819c249039e1508fcd07f793ebea8a127f173ceeaedc7d17f650fa7794d; __stripe_mid=8fe3b13e-cfcb-4de9-9776-6528a1cfe46c2f5c0f; cf_clearance=exU208lykoMbx8B146R13MXXSsC0B_cngvsUEM2eEhQ-1730847161-1.2.1.1-fWDFrtsLtmF7JvaxV5edq8ekENFGijSZnk8XMY8YVmG6aZedfrLFEG.GwesQp0mAa.yByRNjS_gdLNx.KIYRQqgrEuPb6cCqIkbJPQnD_BTJaTIznsbEdPCChLBAuev6DNUbB6eblcaZqqnAGYX0E.YgRuNrFnzUkBljHJ6ayJEqSdu0HbvLzWYc.St2WB1Rgn69Ki1zKgGii.Pzy1XcGNvMQsHbHLNNFxsmRS.qmnjer67QwGQjN3HQbQMxCibiXwCyCpwo4sncWjMjzAZPE.7Lj7CfSGwMY9vhGZhE4g4ZrcogyQ9zQn8vXn2p7C7T29csyDyfM6kq3CxVHSHvlebVH1NBUcWjRZTWaX7nLwxEAWXx2Q8mXAsHIVJrtqTc; __cfruid=56f893338114801c9e7a339b039996ddd111473c-1730847636; _cfuvid=XUM_URznBabjhipaHwGNUZJ12RWMWHQe2i.O7Jf929o-1730854284096-0.0.1.1-604800000";
-    const INVITE: &str = "SH3dNuWd";    
+    const INVITE: &str = "SH3dNuWd";
 
     let mut tokens = String::new();
     let mut file = std::fs::File::open("./tokens.txt").unwrap();
@@ -312,10 +399,12 @@ async fn token_join_leave() {
         "location_channel_type": val["channel"]["type"],
     });
 
-  
     let x_context_properties = base64::encode(&serde_json::to_string(&context_json).unwrap());
-    setup_headers.insert("x-context-properties", HeaderValue::from_str(&x_context_properties).unwrap());
-   
+    setup_headers.insert(
+        "x-context-properties",
+        HeaderValue::from_str(&x_context_properties).unwrap(),
+    );
+
     for val in vals {
         let mut headers = setup_headers.clone();
         headers.insert("authorization", val.parse().unwrap());
@@ -375,13 +464,12 @@ use base64::engine::general_purpose::URL_SAFE;
 use base64::Engine;
 
 fn decode_user_id(token_part: &str) -> Option<String> {
-
     let padding_needed = (4 - token_part.len() % 4) % 4;
     let token_part_1 = format!("{}{}", token_part, "=".repeat(padding_needed));
 
     // Decode the Base64 string
     let decoded_bytes = URL_SAFE.decode(token_part_1).ok().expect("fuck");
-    
+
     let user_id = String::from_utf8(decoded_bytes).ok()?;
     println!("{}", user_id);
     Some(user_id)
@@ -392,7 +480,6 @@ async fn add_bot_to_server() {
     const COOKIE: &'static str = "__dcfduid=9b0e5a9096de11efbaea092ef1a07225; __sdcfduid=9b0e5a9196de11efbaea092ef1a072257d00d819c249039e1508fcd07f793ebea8a127f173ceeaedc7d17f650fa7794d; __stripe_mid=8fe3b13e-cfcb-4de9-9776-6528a1cfe46c2f5c0f; cf_clearance=nXbrVCxkJIbvMkaCBjB6m6fnI6bVSFL1jWW8fF_FVh0-1730855946-1.2.1.1-rGlyuprmEDG8_RI_Fa3YyQuXSLNPOaoXaTfOo7nK.8pRDu_KS35eKLNv19bjbHzsRV8a493fEuZDL56fvtunuWFusZFDHhdqXwFmB3EdWaOHmEinza2bmnuzAW1MUKj31KPWirt80WKy284G893GB.i8Pv2DhUN3p310h_LkGpAqFqrJc.x7HUh0xKZYSQfZgVluUEQdQZEPoNNXQRktOiS0.xuxccryXUYpm5ssgo3Us3WSsrhlH5aMfboRhzPORZ0jU5dbcRK3pGJcR61mKnacUe0modNvX3CWq04p0XGF0KYH4O.d5JmA5fB3yqIBT_t7N.B1wkCf1VJMyD82U8tbApqy3efnhyyFY6iJjuIIescT1AkJk.QL9vR3HiZh; __cfruid=2fba0c38444b871664ebad18b95e3d1cc28af509-1730855952; _cfuvid=0CqnUHwd4t0YJpbJrLtbgVvvIIb1Oig3O4erOsQ1b.s-1730857384992-0.0.1.1-604800000";
     // const BOT_ID: &str = "1196556567403831346";
     const SERVER_ID: &str = "1299815021794164838";
-
 
     let body = json!({
         "guild_id": SERVER_ID,
@@ -406,7 +493,6 @@ async fn add_bot_to_server() {
         }
     });
 
-
     let mut tokens = String::new();
     let mut file = std::fs::File::open("./auth_tokens.txt").unwrap();
     file.read_to_string(&mut tokens).unwrap();
@@ -418,13 +504,14 @@ async fn add_bot_to_server() {
     file1.read_to_string(&mut tokens1).unwrap();
     let bot_tokens = tokens1.split("\n").collect::<Vec<&str>>();
 
-    
     // get user ids from tokens
     let tokens_and_user_ids = bot_tokens
         .into_iter()
         .map(|token| {
-            (token, decode_user_id(token.split(".").nth(0).unwrap()).unwrap())
-        
+            (
+                token,
+                decode_user_id(token.split(".").nth(0).unwrap()).unwrap(),
+            )
         })
         .collect::<Vec<(&str, String)>>();
 
@@ -454,63 +541,61 @@ async fn add_bot_to_server() {
     use tokio::try_join;
 
     futures::stream::iter(tokens_and_user_ids)
-    .for_each_concurrent(None, |(token, user_id)| {
-        let body = body.clone();
-        let headers = setup_headers.clone();
+        .for_each_concurrent(None, |(token, user_id)| {
+            let body = body.clone();
+            let headers = setup_headers.clone();
 
-        // Spawning each request as an async task
-        async move {
-            let client = DiscordClient::new(None).await;
+            // Spawning each request as an async task
+            async move {
+                let client = DiscordClient::new(None).await;
 
-            // Adding a bot
-            let resp = client
-                .send_request(HttpRequest::Post {
-                    endpoint: format!(
-                        "/oauth2/authorize?client_id={}&scope=bot%20applications.commands",
-                        user_id
-                    ),
-                    body: Some(body),
-                    additional_headers: Some(headers),
-                })
-                .await;
+                // Adding a bot
+                let resp = client
+                    .send_request(HttpRequest::Post {
+                        endpoint: format!(
+                            "/oauth2/authorize?client_id={}&scope=bot%20applications.commands",
+                            user_id
+                        ),
+                        body: Some(body),
+                        additional_headers: Some(headers),
+                    })
+                    .await;
 
-            match resp {
-                Ok(response) => {
-                    println!("{}", response.status().as_str());
-                    if response.status().is_success() {
-                        println!("Token has joined the server");
-                        println!("{}", response.text().await.unwrap());
-                    } else {
-                        let headers = response.headers();
-                        let cookies = headers
-                            .get_all("set-cookie")
-                            .into_iter()
-                            .map(|header_value| header_value.to_str().unwrap_or("").to_string())
-                            .collect::<Vec<String>>();
+                match resp {
+                    Ok(response) => {
+                        println!("{}", response.status().as_str());
+                        if response.status().is_success() {
+                            println!("Token has joined the server");
+                            println!("{}", response.text().await.unwrap());
+                        } else {
+                            let headers = response.headers();
+                            let cookies = headers
+                                .get_all("set-cookie")
+                                .into_iter()
+                                .map(|header_value| header_value.to_str().unwrap_or("").to_string())
+                                .collect::<Vec<String>>();
 
-                        println!(
-                            "Token could not join the server: \n{}\n{}",
-                            response.status().as_str(),
-                            response.url()
-                        );
-                        println!("{:?}", headers);
-                        println!("{:?}", cookies);
-                        println!("{}", response.text().await.unwrap());
+                            println!(
+                                "Token could not join the server: \n{}\n{}",
+                                response.status().as_str(),
+                                response.url()
+                            );
+                            println!("{:?}", headers);
+                            println!("{:?}", cookies);
+                            println!("{}", response.text().await.unwrap());
+                        }
+                    }
+                    Err(e) => {
+                        println!("Request failed: {:?}", e);
                     }
                 }
-                Err(e) => {
-                    println!("Request failed: {:?}", e);
-                }
             }
-        }
-    })
-    .await;
+        })
+        .await;
 }
-
 
 #[tokio::test]
 async fn friend_request_user() {
-
     const USERNAME: &str = "gen6442";
     const COOKIE: &str = "__dcfduid=0fcd91109d6611efae1ed79521365559; __sdcfduid=0fcd91119d6611efae1ed795213655598b948d3c4e7cc578aa33251431ebc69b61df95127d38dc547a44bc7473fee752; __cfruid=cd2fa6e43b05469121ae898f6ef1457336b61207-1731024714; _cfuvid=h6nmMqwDnSIhr4XXd8ff1xcx7Ja65elMtqugXC7Zd0Y-1731024714918-0.0.1.1-604800000; cf_clearance=goRmXw7HX3pV5vRIF0od.CU3GwuWF4.pZkSsRjXsRsc-1731024718-1.2.1.1-D8grOksTchA3sE9BLDIR4x7_oseYuBdfxTzVV1urGqa.DvNspCj0wn.nwKEFVR7K8KeohAg1GftGL1rOEN.PDmV4H9Gm47ygEVl7rji7Pv7ww2WZ4l.hxZQl4TjZAonXR6yj.pUaWNsW7UfCMP5UlaJhpgwLB2JFCLoNR8d9RAWkgkq0bPn9A3ScI6s6FZtzB6JJdVavs1tR19CatbXr8om.m2OF0hrzkx9x9DqauYZp5X29eXkQfLJsIBYcjAC.KAn6siozTPjTMs9qiJd9OROkXE81SPEyd4N4h4mjScXESw3TIQbqbK4KJI2MPG1vsqi0rghyHA7tRRMAI2mhuVF3ijfsHpx41cwbgceoJzzL9ecD1aWQuq_HvNnRGTXb";
     const AMT: usize = 1;
@@ -521,39 +606,40 @@ async fn friend_request_user() {
     let vals = tokens.split("\n").take(AMT).collect::<Vec<&str>>();
 
     let mut setup_headers = easy_headers!({
-        "accept": "*/*",
-        "accept-language": "en-US",
-        "Accept-Encoding": "identity", // needed to not get gzip content
-        "content-type": "application/json",
-        "cookie": COOKIE,
-        "priority": "u=1, i",
-        // "referer": format!("https://canary.discord.com/channels/{}/{}", body["guild_id"], body["location_context"]["channel_id"]),
-        "sec-ch-ua": "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"126\"",
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"Linux\"",
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "same-origin",
-        "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-        "x-debug-options": "bugReporterEnabled",
-        "x-discord-locale": "en-US",
-        "x-discord-timezone": "America/New_York",
-        "x-super-properties": "eyJvcyI6IkxpbnV4IiwiYnJvd3NlciI6IkNocm9tZSIsImRldmljZSI6IiIsInN5c3RlbV9sb2NhbGUiOiJlbi1VUyIsImJyb3dzZXJfdXNlcl9hZ2VudCI6Ik1vemlsbGEvNS4wIChYMTE7IExpbnV4IHg4Nl82NCkgQXBwbGVXZWJLaXQvNTM3LjM2IChLSFRNTCwgbGlrZSBHZWNrbykgQ2hyb21lLzEyNi4wLjAuMCBTYWZhcmkvNTM3LjM2IiwiYnJvd3Nlcl92ZXJzaW9uIjoiMTI2LjAuMC4wIiwib3NfdmVyc2lvbiI6IiIsInJlZmVycmVyIjoiIiwicmVmZXJyaW5nX2RvbWFpbiI6IiIsInJlZmVycmVyX2N1cnJlbnQiOiIiLCJyZWZlcnJpbmdfZG9tYWluX2N1cnJlbnQiOiIiLCJyZWxlYXNlX2NoYW5uZWwiOiJjYW5hcnkiLCJjbGllbnRfYnVpbGRfbnVtYmVyIjozNDIwNjMsImNsaWVudF9ldmVudF9zb3VyY2UiOm51bGx9"
-     });
-    
-
+       "accept": "*/*",
+       "accept-language": "en-US",
+       "Accept-Encoding": "identity", // needed to not get gzip content
+       "content-type": "application/json",
+       "cookie": COOKIE,
+       "priority": "u=1, i",
+       // "referer": format!("https://canary.discord.com/channels/{}/{}", body["guild_id"], body["location_context"]["channel_id"]),
+       "sec-ch-ua": "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"126\"",
+       "sec-ch-ua-mobile": "?0",
+       "sec-ch-ua-platform": "\"Linux\"",
+       "sec-fetch-dest": "empty",
+       "sec-fetch-mode": "cors",
+       "sec-fetch-site": "same-origin",
+       "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+       "x-debug-options": "bugReporterEnabled",
+       "x-discord-locale": "en-US",
+       "x-discord-timezone": "America/New_York",
+       "x-super-properties": "eyJvcyI6IkxpbnV4IiwiYnJvd3NlciI6IkNocm9tZSIsImRldmljZSI6IiIsInN5c3RlbV9sb2NhbGUiOiJlbi1VUyIsImJyb3dzZXJfdXNlcl9hZ2VudCI6Ik1vemlsbGEvNS4wIChYMTE7IExpbnV4IHg4Nl82NCkgQXBwbGVXZWJLaXQvNTM3LjM2IChLSFRNTCwgbGlrZSBHZWNrbykgQ2hyb21lLzEyNi4wLjAuMCBTYWZhcmkvNTM3LjM2IiwiYnJvd3Nlcl92ZXJzaW9uIjoiMTI2LjAuMC4wIiwib3NfdmVyc2lvbiI6IiIsInJlZmVycmVyIjoiIiwicmVmZXJyaW5nX2RvbWFpbiI6IiIsInJlZmVycmVyX2N1cnJlbnQiOiIiLCJyZWZlcnJpbmdfZG9tYWluX2N1cnJlbnQiOiIiLCJyZWxlYXNlX2NoYW5uZWwiOiJjYW5hcnkiLCJjbGllbnRfYnVpbGRfbnVtYmVyIjozNDIwNjMsImNsaWVudF9ldmVudF9zb3VyY2UiOm51bGx9"
+    });
 
     let context_json = json!({
         "location": "Add Friend"
     });
 
     let x_context_properties = base64::encode(&serde_json::to_string(&context_json).unwrap());
-    setup_headers.insert("x-context-properties", HeaderValue::from_str(&x_context_properties).unwrap());
+    setup_headers.insert(
+        "x-context-properties",
+        HeaderValue::from_str(&x_context_properties).unwrap(),
+    );
 
     let target = json!({
         "username": USERNAME,
         "discriminator": null
-    
+
     });
 
     let client = DiscordClient::new(None).await;
@@ -562,13 +648,11 @@ async fn friend_request_user() {
         let mut headers = setup_headers.clone();
         headers.insert("authorization", val.parse().unwrap());
 
-        let resp = client
-            .send_request(HttpRequest::Post {
-                endpoint: "/users/@me/relationships".to_string(),
-                body: Some(target.clone()),
-                additional_headers: Some(headers),
-            });
-        
+        let resp = client.send_request(HttpRequest::Post {
+            endpoint: "/users/@me/relationships".to_string(),
+            body: Some(target.clone()),
+            additional_headers: Some(headers),
+        });
 
         let resp = resp.await.unwrap();
 
@@ -588,17 +672,10 @@ async fn friend_request_user() {
             _ => {
                 println!("Unknown status code: {}", val);
                 println!("{}", resp.text().await.unwrap());
-            
-            },
+            }
         }
     }
-
-
-
 }
-
-
-
 
 #[tokio::test]
 async fn friend_request_user_alt() {
@@ -612,34 +689,35 @@ async fn friend_request_user_alt() {
     let vals = tokens.split("\n").take(AMT).collect::<Vec<&str>>();
 
     let mut setup_headers = easy_headers!({
-        "accept": "*/*",
-        "accept-language": "en-US",
-        "Accept-Encoding": "identity", // needed to not get gzip content
-        "content-type": "application/json",
-        "cookie": COOKIE,
-        "priority": "u=1, i",
-        // "referer": format!("https://canary.discord.com/channels/{}/{}", body["guild_id"], body["location_context"]["channel_id"]),
-        "sec-ch-ua": "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"126\"",
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"Linux\"",
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "same-origin",
-        "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-        "x-debug-options": "bugReporterEnabled",
-        "x-discord-locale": "en-US",
-        "x-discord-timezone": "America/New_York",
-        "x-super-properties": "eyJvcyI6IkxpbnV4IiwiYnJvd3NlciI6IkNocm9tZSIsImRldmljZSI6IiIsInN5c3RlbV9sb2NhbGUiOiJlbi1VUyIsImJyb3dzZXJfdXNlcl9hZ2VudCI6Ik1vemlsbGEvNS4wIChYMTE7IExpbnV4IHg4Nl82NCkgQXBwbGVXZWJLaXQvNTM3LjM2IChLSFRNTCwgbGlrZSBHZWNrbykgQ2hyb21lLzEyNi4wLjAuMCBTYWZhcmkvNTM3LjM2IiwiYnJvd3Nlcl92ZXJzaW9uIjoiMTI2LjAuMC4wIiwib3NfdmVyc2lvbiI6IiIsInJlZmVycmVyIjoiIiwicmVmZXJyaW5nX2RvbWFpbiI6IiIsInJlZmVycmVyX2N1cnJlbnQiOiIiLCJyZWZlcnJpbmdfZG9tYWluX2N1cnJlbnQiOiIiLCJyZWxlYXNlX2NoYW5uZWwiOiJjYW5hcnkiLCJjbGllbnRfYnVpbGRfbnVtYmVyIjozNDIwNjMsImNsaWVudF9ldmVudF9zb3VyY2UiOm51bGx9"
-     });
-    
-
+       "accept": "*/*",
+       "accept-language": "en-US",
+       "Accept-Encoding": "identity", // needed to not get gzip content
+       "content-type": "application/json",
+       "cookie": COOKIE,
+       "priority": "u=1, i",
+       // "referer": format!("https://canary.discord.com/channels/{}/{}", body["guild_id"], body["location_context"]["channel_id"]),
+       "sec-ch-ua": "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"126\"",
+       "sec-ch-ua-mobile": "?0",
+       "sec-ch-ua-platform": "\"Linux\"",
+       "sec-fetch-dest": "empty",
+       "sec-fetch-mode": "cors",
+       "sec-fetch-site": "same-origin",
+       "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+       "x-debug-options": "bugReporterEnabled",
+       "x-discord-locale": "en-US",
+       "x-discord-timezone": "America/New_York",
+       "x-super-properties": "eyJvcyI6IkxpbnV4IiwiYnJvd3NlciI6IkNocm9tZSIsImRldmljZSI6IiIsInN5c3RlbV9sb2NhbGUiOiJlbi1VUyIsImJyb3dzZXJfdXNlcl9hZ2VudCI6Ik1vemlsbGEvNS4wIChYMTE7IExpbnV4IHg4Nl82NCkgQXBwbGVXZWJLaXQvNTM3LjM2IChLSFRNTCwgbGlrZSBHZWNrbykgQ2hyb21lLzEyNi4wLjAuMCBTYWZhcmkvNTM3LjM2IiwiYnJvd3Nlcl92ZXJzaW9uIjoiMTI2LjAuMC4wIiwib3NfdmVyc2lvbiI6IiIsInJlZmVycmVyIjoiIiwicmVmZXJyaW5nX2RvbWFpbiI6IiIsInJlZmVycmVyX2N1cnJlbnQiOiIiLCJyZWZlcnJpbmdfZG9tYWluX2N1cnJlbnQiOiIiLCJyZWxlYXNlX2NoYW5uZWwiOiJjYW5hcnkiLCJjbGllbnRfYnVpbGRfbnVtYmVyIjozNDIwNjMsImNsaWVudF9ldmVudF9zb3VyY2UiOm51bGx9"
+    });
 
     let context_json = json!({
         "location": "bite size profile popout"
     });
 
     let x_context_properties = base64::encode(&serde_json::to_string(&context_json).unwrap());
-    setup_headers.insert("x-context-properties", HeaderValue::from_str(&x_context_properties).unwrap());
+    setup_headers.insert(
+        "x-context-properties",
+        HeaderValue::from_str(&x_context_properties).unwrap(),
+    );
 
     let target = json!({});
 
@@ -649,13 +727,11 @@ async fn friend_request_user_alt() {
         let mut headers = setup_headers.clone();
         headers.insert("authorization", val.parse().unwrap());
 
-        let resp = client
-            .send_request(HttpRequest::Put {
-                endpoint: format!("/users/@me/relationships/{}", USER_ID),
-                body: Some(target.clone()),
-                additional_headers: Some(headers),
-            });
-        
+        let resp = client.send_request(HttpRequest::Put {
+            endpoint: format!("/users/@me/relationships/{}", USER_ID),
+            body: Some(target.clone()),
+            additional_headers: Some(headers),
+        });
 
         let resp = resp.await.unwrap();
 
@@ -668,7 +744,7 @@ async fn friend_request_user_alt() {
             400 => {
                 println!("Bad request: {}", val);
                 println!("{}", resp.text().await.unwrap());
-            },
+            }
             403 => println!("Forbidden: {}", val),
             429 => println!("Rate limited: {}", val),
             500 => println!("Internal server error: {}", val),
@@ -678,13 +754,9 @@ async fn friend_request_user_alt() {
             _ => {
                 println!("Unknown status code: {}", val);
                 println!("{}", resp.text().await.unwrap());
-            
-            },
+            }
         }
     }
-
-
-
 }
 
 #[tokio::test]
