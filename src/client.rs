@@ -28,7 +28,7 @@ use std::io::{Read, Write};
 use std::sync::Arc;
 
 pub struct WebsocketClientBuilder {
-    hb_only: bool,
+    minimal: bool,
     proxy: Option<rquest::Proxy>,
     token: Option<String>,
     buffer_size: usize,
@@ -37,7 +37,7 @@ pub struct WebsocketClientBuilder {
 impl WebsocketClientBuilder {
     fn new() -> WebsocketClientBuilder {
         WebsocketClientBuilder {
-            hb_only: false,
+            minimal: false,
             proxy: None,
             token: None,
             buffer_size: 2 << 22,
@@ -59,8 +59,8 @@ impl WebsocketClientBuilder {
         self
     }
 
-    fn hb_only(mut self, hb_only: bool) -> WebsocketClientBuilder {
-        self.hb_only = hb_only;
+    fn minimal(mut self, minimal: bool) -> WebsocketClientBuilder {
+        self.minimal = minimal;
         self
     }
 
@@ -91,6 +91,7 @@ impl WebsocketClientBuilder {
             message_tx: Mutex::new(message_tx),
             message_rx: Mutex::new(message_rx),
             token: self.token.expect("No token provided"),
+            minimal: self.minimal,
             state: Mutex::new(WebsocketClientState::Init),
             session_id: Mutex::new(None),
         };
@@ -100,7 +101,7 @@ impl WebsocketClientBuilder {
         let wrapped2 = wrapped.clone();
 
         wrapped2.start_sending(tx);
-        if self.hb_only {
+        if self.minimal {
             wrapped1.send_off_init().await;
         } else {
             wrapped1.start_receiving(rx, self.buffer_size);
@@ -114,6 +115,7 @@ pub struct WebsocketClient {
     message_tx: Mutex<mpsc::Sender<Message>>,
     message_rx: Mutex<mpsc::Receiver<Message>>,
     token: String,
+    minimal: bool,
     state: Mutex<WebsocketClientState>,
     session_id: Mutex<Option<String>>,
 }
@@ -123,7 +125,6 @@ enum WebsocketClientState {
     Init,
     Connected,
     Disconnected,
-
 }
 
 impl WebsocketClient {
@@ -145,7 +146,11 @@ impl WebsocketClient {
     }
 
     pub async fn close(&self) {
-        self.send(Message::Close { code: rquest::CloseCode::Normal, reason: None }).await;
+        self.send(Message::Close {
+            code: rquest::CloseCode::Normal,
+            reason: None,
+        })
+        .await;
     }
 
     fn start_sending(self: Arc<Self>, mut tx: SplitSink<WebSocket, Message>) {
@@ -169,13 +174,18 @@ impl WebsocketClient {
         tokio::spawn(async move {
             while let Some(Ok(message)) = rx.next().await {
                 match message {
-                    Message::Binary(bytes) => match decompressor.decompress(&bytes) {
-                        Ok(dcmp_str) => {
-                            let json = serde_json::from_str::<Value>(&dcmp_str).unwrap();
-                            self.handle_message(&json).await;
+                    Message::Binary(bytes) => {
+                        if bytes.len() > 2000 && self.minimal {
+                            continue;
                         }
-                        Err(why) => eprintln!("Failed to decompress binary: {}", why),
-                    },
+                        match decompressor.decompress(&bytes) {
+                            Ok(dcmp_str) => {
+                                let json = serde_json::from_str::<Value>(&dcmp_str).unwrap();
+                                self.handle_message(&json).await;
+                            }
+                            Err(why) => eprintln!("Failed to decompress binary: {}", why),
+                        }
+                    }
                     Message::Close { code, reason } => {
                         eprintln!("Connection closed: {} - {:?}", code, reason);
                         let mut state_lock = self.state.lock().await;
@@ -193,8 +203,8 @@ impl WebsocketClient {
     async fn send_json(&self, message: &Value) {
         let tx = self.message_tx.lock().await;
         tx.send(Message::Text(serde_json::to_string(&message).unwrap()))
-        .await
-        .expect("Failed to send json message");
+            .await
+            .expect("Failed to send json message");
     }
 
     async fn send(&self, message: Message) {
@@ -241,6 +251,7 @@ impl WebsocketClient {
     }
 
     pub async fn handle_message(&self, json: &Value) {
+        println!("Received: {}", json);
         match json["op"].as_i64() {
             Some(10) => {
                 // HELLO event
@@ -329,14 +340,12 @@ impl DiscordClient {
 
 #[tokio::test]
 async fn test_discord_ws() {
-    let mut tokens = String::new();
+    const AMT: usize = 1;
+
+    let mut token_str = String::new();
     let mut file = std::fs::File::open("./tokens.txt").unwrap();
-    file.read_to_string(&mut tokens).unwrap();
-    let token = tokens
-        .split("\n")
-        .into_iter()
-        .next()
-        .expect("No tokens in file.");
+    file.read_to_string(&mut token_str).unwrap();
+    let tokens: Vec<&str> = token_str.split("\n").into_iter().take(AMT).collect();
 
     let other_headers = experiment_headers(
         rquest::Client::builder()
@@ -346,20 +355,28 @@ async fn test_discord_ws() {
     )
     .await;
 
-    let client = WebsocketClient::builder()
-        .token(token)
-        .connect(Some(other_headers))
-        .await;
+    let tasks = tokens.iter().map(|tok| {
+        let tok = tok.to_string();
+        let other_headers = other_headers.clone();
+        async move {
+            let client = WebsocketClient::builder()
+                .token(&tok)
+                .minimal(true)
+                .connect(Some(other_headers))
+                .await;
 
-    // wait until session id is set
-
-    while !client.closed().await {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        if let Some(session_id) = client.session_id().await {
-            println!("Session ID: {}", session_id);
-            break;
+            // wait until session id is set
+            while !client.closed().await {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                if let Some(session_id) = client.session_id().await {
+                    println!("Session ID: {}", session_id);
+                    break;
+                }
+            }
         }
-    }
+    });
+
+    future::join_all(tasks).await;
 }
 
 #[tokio::test]
@@ -438,75 +455,75 @@ async fn token_join_leave() {
         HeaderValue::from_str(&x_context_properties).unwrap(),
     );
 
-    let tasks: Vec<_> = vals.into_iter().map(|val| {
-        let client = client.clone();
-        let setup_headers = setup_headers.clone();
-        let invite = INVITE.to_string();
-        task::spawn(async move {
-            let mut headers = setup_headers.clone();
-            headers.insert("authorization", val.parse().unwrap());
+    let tasks: Vec<_> = vals
+        .into_iter()
+        .map(|val| {
+            let client = client.clone();
+            let setup_headers = setup_headers.clone();
+            let invite = INVITE.to_string();
+            task::spawn(async move {
+                let mut headers = setup_headers.clone();
+                headers.insert("authorization", val.parse().unwrap());
 
+                let ws_client = WebsocketClient::builder()
+                    .token(&val)
+                    .connect(Some(setup_headers.clone()))
+                    .await;
 
-            let ws_client = WebsocketClient::builder()
-                .token(&val)
-                .connect(Some(setup_headers.clone()))
-                .await;
-
-            for _i in 0..10 {
-                if ws_client.closed().await {
-                    return; // skip invalid token
+                for _i in 0..10 {
+                    if ws_client.closed().await {
+                        return; // skip invalid token
+                    }
+                    if ws_client.ready().await {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                 }
-                if ws_client.ready().await {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_secs(1)).await;
-            }
 
-            let session_id = ws_client.session_id().await.unwrap();
-            
+                let session_id = ws_client.session_id().await.unwrap();
 
-            // Join the server
-            let resp = client
-                .send_request(HttpRequest::Post {
-                    endpoint: format!("/invites/{}", invite),
-                    body: Some(json!({"session_id": session_id})),
-                    additional_headers: Some(headers.clone()),
-                })
-                .await;
+                // Join the server
+                let resp = client
+                    .send_request(HttpRequest::Post {
+                        endpoint: format!("/invites/{}", invite),
+                        body: Some(json!({"session_id": session_id})),
+                        additional_headers: Some(headers.clone()),
+                    })
+                    .await;
 
-            match resp {
-                Ok(response) if response.status().is_success() => {
-                    println!("Token has joined the server: {}", val);
-                }
-                Ok(response) => {
-                    let headers = response.headers();
-                    let cookies = headers
-                        .get_all("set-cookie")
-                        .into_iter()
-                        .map(|header_value| header_value.to_str().unwrap_or("").to_string())
-                        .collect::<Vec<String>>();
+                match resp {
+                    Ok(response) if response.status().is_success() => {
+                        println!("Token has joined the server: {}", val);
+                    }
+                    Ok(response) => {
+                        let headers = response.headers();
+                        let cookies = headers
+                            .get_all("set-cookie")
+                            .into_iter()
+                            .map(|header_value| header_value.to_str().unwrap_or("").to_string())
+                            .collect::<Vec<String>>();
 
-                    println!(
-                        "Token could not join the server: {}\n{}\n{}",
-                        val,
-                        response.status().as_str(),
-                        response.url()
-                    );
-                    println!("{:?}", headers);
-                    println!("{:?}", cookies);
-                    // println!("{}", response.text().await.unwrap());
+                        println!(
+                            "Token could not join the server: {}\n{}\n{}",
+                            val,
+                            response.status().as_str(),
+                            response.url()
+                        );
+                        println!("{:?}", headers);
+                        println!("{:?}", cookies);
+                        // println!("{}", response.text().await.unwrap());
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to send join request for token {}: {}", val, e);
+                    }
                 }
-                Err(e) => {
-                    eprintln!("Failed to send join request for token {}: {}", val, e);
-                }
-            }
+            })
         })
-    }).collect();
+        .collect();
 
     // Await all join/leave tasks
     future::join_all(tasks).await;
 }
-
 
 use base64::engine::general_purpose::URL_SAFE;
 use base64::Engine;
@@ -692,11 +709,7 @@ async fn friend_request_user() {
 
     let client = DiscordClient::new(None).await;
 
-
-
-
     for val in vals {
-
         let mut headers = setup_headers.clone();
         headers.insert("authorization", val.parse().unwrap());
 
