@@ -91,6 +91,7 @@ impl WebsocketClientBuilder {
             message_tx: Mutex::new(message_tx),
             message_rx: Mutex::new(message_rx),
             token: self.token.expect("No token provided"),
+            state: Mutex::new(WebsocketClientState::Init),
             session_id: Mutex::new(None),
         };
 
@@ -113,12 +114,38 @@ pub struct WebsocketClient {
     message_tx: Mutex<mpsc::Sender<Message>>,
     message_rx: Mutex<mpsc::Receiver<Message>>,
     token: String,
+    state: Mutex<WebsocketClientState>,
     session_id: Mutex<Option<String>>,
+}
+
+#[derive(PartialEq, Copy, Clone)]
+enum WebsocketClientState {
+    Init,
+    Connected,
+    Disconnected,
+
 }
 
 impl WebsocketClient {
     pub fn builder() -> WebsocketClientBuilder {
         WebsocketClientBuilder::new()
+    }
+
+    pub async fn session_id(&self) -> Option<String> {
+        let session_id = self.session_id.lock().await.clone();
+        session_id
+    }
+
+    pub async fn ready(&self) -> bool {
+        self.state.lock().await.clone() == WebsocketClientState::Connected
+    }
+
+    pub async fn closed(&self) -> bool {
+        self.state.lock().await.clone() == WebsocketClientState::Disconnected
+    }
+
+    pub async fn close(&self) {
+        self.send(Message::Close { code: rquest::CloseCode::Normal, reason: None }).await;
     }
 
     fn start_sending(self: Arc<Self>, mut tx: SplitSink<WebSocket, Message>) {
@@ -151,6 +178,8 @@ impl WebsocketClient {
                     },
                     Message::Close { code, reason } => {
                         eprintln!("Connection closed: {} - {:?}", code, reason);
+                        let mut state_lock = self.state.lock().await;
+                        *state_lock = WebsocketClientState::Disconnected;
                         break;
                     }
                     _ => {
@@ -161,7 +190,19 @@ impl WebsocketClient {
         });
     }
 
-    pub async fn send_off_init(&self) {
+    async fn send_json(&self, message: &Value) {
+        let tx = self.message_tx.lock().await;
+        tx.send(Message::Text(serde_json::to_string(&message).unwrap()))
+        .await
+        .expect("Failed to send json message");
+    }
+
+    async fn send(&self, message: Message) {
+        let tx = self.message_tx.lock().await;
+        tx.send(message).await.expect("Failed to send message");
+    }
+
+    async fn send_off_init(&self) {
         let identify_payload = json!({
             "op": 2,
             "d": {
@@ -184,7 +225,7 @@ impl WebsocketClient {
                     "client_event_source": null
                 },
                 "presence": {
-                    "status": "unknown",
+                    "status": "idle",
                     "since": 0,
                     "activities": [],
                     "afk": false
@@ -196,20 +237,10 @@ impl WebsocketClient {
             }
         });
 
-        let tx = self.message_tx.lock().await;
-        if tx
-            .send(Message::Text(
-                serde_json::to_string(&identify_payload).unwrap(),
-            ))
-            .await
-            .is_err()
-        {
-            eprintln!("Failed to send IDENTIFY");
-        }
+        self.send_json(&identify_payload).await;
     }
 
     pub async fn handle_message(&self, json: &Value) {
-        println!("Received decoded binary: {:?}", json);
         match json["op"].as_i64() {
             Some(10) => {
                 // HELLO event
@@ -219,6 +250,9 @@ impl WebsocketClient {
                 if let Some(session_id) = json["d"]["session_id"].as_str() {
                     let mut session_id_lock = self.session_id.lock().await;
                     *session_id_lock = Some(session_id.to_string());
+
+                    let mut state_lock = self.state.lock().await;
+                    *state_lock = WebsocketClientState::Connected;
                 }
             }
             _ => {}
@@ -296,7 +330,7 @@ impl DiscordClient {
 #[tokio::test]
 async fn test_discord_ws() {
     let mut tokens = String::new();
-    let mut file = std::fs::File::open("./auth_tokens.txt").unwrap();
+    let mut file = std::fs::File::open("./tokens.txt").unwrap();
     file.read_to_string(&mut tokens).unwrap();
     let token = tokens
         .split("\n")
@@ -306,7 +340,7 @@ async fn test_discord_ws() {
 
     let other_headers = experiment_headers(
         rquest::Client::builder()
-            .impersonate_without_headers(Impersonate::Chrome128)
+            .impersonate_without_headers(Impersonate::Chrome126)
             .build()
             .unwrap(),
     )
@@ -319,16 +353,13 @@ async fn test_discord_ws() {
 
     // wait until session id is set
 
-    loop {
+    while !client.closed().await {
         tokio::time::sleep(Duration::from_secs(1)).await;
-        if let Some(session_id) = client.session_id.lock().await.clone() {
+        if let Some(session_id) = client.session_id().await {
             println!("Session ID: {}", session_id);
             break;
         }
     }
-
-    // let id = client.connect_and_identify(token, true).await;
-    // println!("{:?}", id);
 }
 
 #[tokio::test]
@@ -340,21 +371,23 @@ async fn get_headers() {
             .await;
     }
 }
+use futures::future;
+use tokio::task;
 
 #[tokio::test]
 async fn token_join_leave() {
-    const AMT: usize = 3;
+    const AMT: usize = 10;
     const COOKIE: &'static str = "__dcfduid=9b0e5a9096de11efbaea092ef1a07225; __sdcfduid=9b0e5a9196de11efbaea092ef1a072257d00d819c249039e1508fcd07f793ebea8a127f173ceeaedc7d17f650fa7794d; __stripe_mid=8fe3b13e-cfcb-4de9-9776-6528a1cfe46c2f5c0f; cf_clearance=exU208lykoMbx8B146R13MXXSsC0B_cngvsUEM2eEhQ-1730847161-1.2.1.1-fWDFrtsLtmF7JvaxV5edq8ekENFGijSZnk8XMY8YVmG6aZedfrLFEG.GwesQp0mAa.yByRNjS_gdLNx.KIYRQqgrEuPb6cCqIkbJPQnD_BTJaTIznsbEdPCChLBAuev6DNUbB6eblcaZqqnAGYX0E.YgRuNrFnzUkBljHJ6ayJEqSdu0HbvLzWYc.St2WB1Rgn69Ki1zKgGii.Pzy1XcGNvMQsHbHLNNFxsmRS.qmnjer67QwGQjN3HQbQMxCibiXwCyCpwo4sncWjMjzAZPE.7Lj7CfSGwMY9vhGZhE4g4ZrcogyQ9zQn8vXn2p7C7T29csyDyfM6kq3CxVHSHvlebVH1NBUcWjRZTWaX7nLwxEAWXx2Q8mXAsHIVJrtqTc; __cfruid=56f893338114801c9e7a339b039996ddd111473c-1730847636; _cfuvid=XUM_URznBabjhipaHwGNUZJ12RWMWHQe2i.O7Jf929o-1730854284096-0.0.1.1-604800000";
-    const INVITE: &str = "SH3dNuWd";
+    const INVITE: &str = "8Aspy3uM";
 
     let mut tokens = String::new();
     let mut file = std::fs::File::open("./tokens.txt").unwrap();
     file.read_to_string(&mut tokens).unwrap();
     let vals = tokens
-        .split("\n")
-        .into_iter()
+        .split('\n')
         .take(AMT)
-        .collect::<Vec<&str>>();
+        .map(|s| s.to_string())
+        .collect::<Vec<String>>();
 
     let mut setup_headers = easy_headers!({
         "accept": "*/*",
@@ -405,60 +438,75 @@ async fn token_join_leave() {
         HeaderValue::from_str(&x_context_properties).unwrap(),
     );
 
-    for val in vals {
-        let mut headers = setup_headers.clone();
-        headers.insert("authorization", val.parse().unwrap());
-        let shit = headers.clone();
+    let tasks: Vec<_> = vals.into_iter().map(|val| {
+        let client = client.clone();
+        let setup_headers = setup_headers.clone();
+        let invite = INVITE.to_string();
+        task::spawn(async move {
+            let mut headers = setup_headers.clone();
+            headers.insert("authorization", val.parse().unwrap());
 
-        // Joining a server
-        let resp = client
-            .send_request(HttpRequest::Post {
-                endpoint: format!("/invites/{}", INVITE),
-                body: Some(json!({"session_id": Value::Null})),
-                additional_headers: Some(headers),
-            })
-            .await
-            .unwrap();
-        println!("{}", resp.status().as_str());
-        if resp.status().is_success() {
-            println!("Token has joined the server: {}", val);
-        } else {
-            let headers = resp.headers();
-            let cookies = headers
-                .get_all("set-cookie")
-                .into_iter()
-                .map(|header_value| header_value.to_str().unwrap_or("").to_string())
-                .collect::<Vec<String>>();
 
-            println!(
-                "Token could not join the server: {}\n{}\n{}",
-                val,
-                resp.status().as_str(),
-                resp.url()
-            );
-            println!("{:?}", shit);
-            println!("{:?}", headers);
-            println!("{:?}", cookies);
-            println!("{}", resp.text().await.unwrap())
-        }
+            let ws_client = WebsocketClient::builder()
+                .token(&val)
+                .connect(Some(setup_headers.clone()))
+                .await;
 
-        // // Leaving a server
-        // let resp = client.send_request(
-        //     HttpRequest::Delete {
-        //         endpoint: "/users/@me/guilds/1299815021794164838".to_string(),
-        //         additional_headers: Some(easy_headers!({"authorization": val}))
-        //     }
-        // )
-        // .await
-        // .unwrap();
-        // println!("{}", resp.status().as_str());
-        // if resp.status().is_success() {
-        //     println!("Token has left the server: {}", val)
-        // } else {
-        //     println!("Token could not leave the server: {}\n{}\n{}", val, resp.status().as_str(), resp.text().await.unwrap())
-        // }
-    }
+            for _i in 0..10 {
+                if ws_client.closed().await {
+                    return; // skip invalid token
+                }
+                if ws_client.ready().await {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+
+            let session_id = ws_client.session_id().await.unwrap();
+            
+
+            // Join the server
+            let resp = client
+                .send_request(HttpRequest::Post {
+                    endpoint: format!("/invites/{}", invite),
+                    body: Some(json!({"session_id": session_id})),
+                    additional_headers: Some(headers.clone()),
+                })
+                .await;
+
+            match resp {
+                Ok(response) if response.status().is_success() => {
+                    println!("Token has joined the server: {}", val);
+                }
+                Ok(response) => {
+                    let headers = response.headers();
+                    let cookies = headers
+                        .get_all("set-cookie")
+                        .into_iter()
+                        .map(|header_value| header_value.to_str().unwrap_or("").to_string())
+                        .collect::<Vec<String>>();
+
+                    println!(
+                        "Token could not join the server: {}\n{}\n{}",
+                        val,
+                        response.status().as_str(),
+                        response.url()
+                    );
+                    println!("{:?}", headers);
+                    println!("{:?}", cookies);
+                    // println!("{}", response.text().await.unwrap());
+                }
+                Err(e) => {
+                    eprintln!("Failed to send join request for token {}: {}", val, e);
+                }
+            }
+        })
+    }).collect();
+
+    // Await all join/leave tasks
+    future::join_all(tasks).await;
 }
+
 
 use base64::engine::general_purpose::URL_SAFE;
 use base64::Engine;
@@ -644,7 +692,11 @@ async fn friend_request_user() {
 
     let client = DiscordClient::new(None).await;
 
+
+
+
     for val in vals {
+
         let mut headers = setup_headers.clone();
         headers.insert("authorization", val.parse().unwrap());
 
