@@ -2,6 +2,7 @@ use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
 use regex::Regex;
 use rquest::header::{HeaderMap, HeaderName, HeaderValue};
 
+
 use std::path::Path;
 use std::string::FromUtf8Error;
 
@@ -21,6 +22,17 @@ macro_rules! easy_headers {
             headers.insert(header_name, header_value);
         )*
         headers
+    }};
+}
+
+#[macro_export]
+macro_rules! easy_params {
+    ( { $($key:tt : $value:expr),* $(,)? } ) => {{
+        let mut params = std::collections::HashMap::new();
+        $(
+            params.insert($key.to_string(), $value.to_string());
+        )*
+        params
     }};
 }
 
