@@ -1,6 +1,5 @@
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine};
 use flate2::{Decompress, FlushDecompress};
-use futures::SinkExt;
 use regex::Regex;
 use rquest::header::{HeaderMap, HeaderName, HeaderValue};
 
@@ -9,7 +8,7 @@ use std::{io::ErrorKind, path::Path};
 use std::string::FromUtf8Error;
 
 use crate::types::SuperProperties;
-use std::io::{self, Read};
+use std::io::{self};
 
 pub fn encode(s: &str) -> String {
     STANDARD_NO_PAD.encode(s)
@@ -37,7 +36,7 @@ impl ZlibStreamDecompressor {
             .decompressor
             .decompress(bytes, &mut self.buffer, FlushDecompress::Sync)
         {
-            Ok(status) => {
+            Ok(_status) => {
                 // Append only the valid part of the decompressed data to `self.buffer`
                 let bytes_written = self.decompressor.total_out() as usize;
                 let diff = bytes_written - self.last_out;

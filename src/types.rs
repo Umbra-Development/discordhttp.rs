@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-const ROOT: &str = "https://discord.com/api/v9";
+const ROOT: &str = "https://canary.discord.com/api/v9";
 
 #[derive(Debug, Clone)]
 pub enum HttpRequest {
@@ -27,8 +27,14 @@ pub enum HttpRequest {
     },
     Delete {
         endpoint: String,
+        body: Option<Value>,
         additional_headers: Option<HeaderMap<HeaderValue>>,
     },
+    Patch {
+        endpoint: String,
+        body: Option<Value>,
+        additional_headers: Option<HeaderMap<HeaderValue>>,
+    }
 }
 
 impl HttpRequest {
@@ -78,9 +84,28 @@ impl HttpRequest {
             }
             HttpRequest::Delete {
                 endpoint,
+                body,
                 additional_headers,
             } => {
                 let mut request = client.request(Method::DELETE, format!("{}{}", ROOT, endpoint));
+                if let Some(headers) = additional_headers {
+                    request = request.headers(headers.to_owned())
+                }
+
+                if let Some(body) = body {
+                    request = request.json(body);
+                }
+                request
+            },
+            HttpRequest::Patch {
+                endpoint,
+                body,
+                additional_headers,
+            } => {
+                let mut request = client.request(Method::PATCH, format!("{}{}", ROOT, endpoint));
+                if let Some(body) = body {
+                    request = request.json(body);
+                }
                 if let Some(headers) = additional_headers {
                     request = request.headers(headers.to_owned())
                 }
