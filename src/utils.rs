@@ -179,6 +179,8 @@ fn build_super_properties(user_agent: &String) -> String {
 }
 
 pub fn http_default_headers(headers: &mut HeaderMap) {
+    // This is changed immediately it's just some stuff for lib
+    // Dw too much
     headers.extend(easy_headers!({
         "sec-ch-ua": "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"126\", \"Google Chrome\";v=\"126\"",
         "sec-ch-ua-mobile": "?0",
@@ -195,6 +197,28 @@ pub fn http_default_headers(headers: &mut HeaderMap) {
     }));
 
 }
+
+pub fn configure_proxy(
+    builder: rquest::ClientBuilder,
+    proxy: Option<rquest::Proxy>,
+) -> rquest::ClientBuilder {
+    if let Some(proxy) = proxy {
+        builder.proxy(proxy)
+    } else {
+        builder
+    }
+}
+
+pub fn decode_user_id(token_part: &str) -> Option<String> {
+    let padding_needed = (4 - token_part.len() % 4) % 4;
+    let token_part_1 = format!("{}{}", token_part, "=".repeat(padding_needed));
+
+    // Decode the Base64 string
+    let decoded_bytes = decode(&token_part_1).unwrap();
+    println!("{}", decoded_bytes);
+    Some(decoded_bytes)
+}
+
 
 pub fn default_headers(user_agent: Option<String>) -> HeaderMap {
     let user_agent_1 = user_agent.unwrap_or(randua::new().safari().desktop().to_string());
