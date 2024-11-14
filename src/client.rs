@@ -1,15 +1,14 @@
 #![allow(unused_imports)]
 use crate::types::HttpRequest;
-use crate::utils::{default_headers, experiment_headers, http_default_headers, merge_headermaps, ZlibStreamDecompressor};
+use crate::utils::{default_headers, encode, experiment_headers, http_default_headers, merge_headermaps, ZlibStreamDecompressor};
 use crate::{easy_headers, easy_params};
 use flate2::write::{GzEncoder, ZlibEncoder};
 use flate2::Compression;
 use futures::lock::Mutex;
 use futures::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
-use jsonwebtoken::{encode, EncodingKey, Header};
+use jsonwebtoken::{EncodingKey, Header};
 use rquest::boring::ssl::{SslConnector, SslCurve, SslMethod, SslOptions, SslVersion};
-use rquest::tls::chrome::tls_template_6;
 use rquest::tls::chrome::{http2_template_3, tls_template_6};
 use tokio::sync::mpsc;
 use tokio::time::Duration;
@@ -454,7 +453,7 @@ async fn token_join_server() {
         "x-debug-options": "bugReporterEnabled",
         "x-discord-locale": "en-US",
         "x-discord-timezone": "America/New_York",
-        // "x-super-properties": "eyJvcyI6IkxpbnV4IiwiYnJvd3NlciI6IkRpc2NvcmQgQ2xpZW50IiwicmVsZWFzZV9jaGFubmVsIjoic3RhYmxlIiwiY2xpZW50X3ZlcnNpb24iOiIwLjAuNzEiLCJvc192ZXJzaW9uIjoiNi4xLjExMi0xLU1BTkpBUk8iLCJvc19hcmNoIjoieDY0IiwiYXBwX2FyY2giOiJ4NjQiLCJzeXN0ZW1fbG9jYWxlIjoiZW4tVVMiLCJicm93c2VyX3VzZXJfYWdlbnQiOiJNb3ppbGxhLzUuMCAoWDExOyBMaW51eCB4ODZfNjQpIEFwcGxlV2ViS2l0LzUzNy4zNiAoS0hUTUwsIGxpa2UgR2Vja28pIGRpc2NvcmQvMC4wLjcxIENocm9tZS8xMjguMC42NjEzLjM2IEVsZWN0cm9uLzMyLjAuMCBTYWZhcmkvNTM3LjM2IiwiYnJvd3Nlcl92ZXJzaW9uIjoiMzIuMC4wIiwid2luZG93X21hbmFnZXIiOiJLREUsdW5rbm93biIsImRpc3RybyI6IlwiTWFuamFybyBMaW51eFwiIiwiY2xpZW50X2J1aWxkX251bWJlciI6MzQyOTY4LCJuYXRpdmVfYnVpbGRfbnVtYmVyIjpudWxsLCJjbGllbnRfZXZlbnRfc291cmNlIjpudWxsfQ=="
+        "x-super-properties": "eyJvcyI6IkxpbnV4IiwiYnJvd3NlciI6IkRpc2NvcmQgQ2xpZW50IiwicmVsZWFzZV9jaGFubmVsIjoic3RhYmxlIiwiY2xpZW50X3ZlcnNpb24iOiIwLjAuNzEiLCJvc192ZXJzaW9uIjoiNi4xLjExMi0xLU1BTkpBUk8iLCJvc19hcmNoIjoieDY0IiwiYXBwX2FyY2giOiJ4NjQiLCJzeXN0ZW1fbG9jYWxlIjoiZW4tVVMiLCJicm93c2VyX3VzZXJfYWdlbnQiOiJNb3ppbGxhLzUuMCAoWDExOyBMaW51eCB4ODZfNjQpIEFwcGxlV2ViS2l0LzUzNy4zNiAoS0hUTUwsIGxpa2UgR2Vja28pIGRpc2NvcmQvMC4wLjcxIENocm9tZS8xMjguMC42NjEzLjM2IEVsZWN0cm9uLzMyLjAuMCBTYWZhcmkvNTM3LjM2IiwiYnJvd3Nlcl92ZXJzaW9uIjoiMzIuMC4wIiwid2luZG93X21hbmFnZXIiOiJLREUsdW5rbm93biIsImRpc3RybyI6IlwiTWFuamFybyBMaW51eFwiIiwiY2xpZW50X2J1aWxkX251bWJlciI6MzQyOTY4LCJuYXRpdmVfYnVpbGRfbnVtYmVyIjpudWxsLCJjbGllbnRfZXZlbnRfc291cmNlIjpudWxsfQ=="
     });
     
     
@@ -580,165 +579,6 @@ async fn token_join_server() {
 
     // Await all join/leave tasks
     // future::join_all(tasks).await;
-}
-
-
-
-async fn token_join_leave() {
-    const AMT: usize = 10;
-    const COOKIE: &'static str = "__dcfduid=bc4b4a109d5011ef833e0b1fb32cadce; __sdcfduid=bc4b4a119d5011ef833e0b1fb32cadceafc4bb20a60e5c95bd6d09a28cf68415465b417ea1642a8ccb8a9b20681c9321; __stripe_mid=bb2e2063-095b-456c-b060-792d71d2b85bbddd17; locale=en-US; cf_clearance=LYUghigCzfgBXiwq6nbiLGeliXXxGjBTEBtvqZfmyDQ-1731204494-1.2.1.1-glZEsX_E9RRIgcHSIdYl7Xp4QWqcIAq0hQ_cEfgtfgSQxtQ0Xje_dCKGYClXsie8fkJRURCqnts9d3NJMtrqXh3qpa5XHiDRH7C187CVmsTYtwjN9Q6KdZnSYnObWUluMAucKQgkOBXt6.9USLXqkfcO9NHzWLRpeCvgDqvNDN6ndINs_a8qvq5WN_ekCPS4qvyO0tnNVazrvG44ekOm5Ndwv6dElienRCsc_FWoxynD2wjHVxeQC03qkiLzc0kxphnr.P3lM44ulp7CyarH4IwCCWllvUFa1iyVU.tVAoENBQcv0eXGNL9guDrKLm9ek1920bLrAnCk.B6.Eq6sODBlRWlp_AXb3AtoU8MFUrkydv1ZhH7pfiAeB3F1ZqUy; __cfruid=043fdb52b5cef834dbd0b7ffa9db222931cdbc53-1731369136; _cfuvid=qoTMYboLr9LqfE7tViZg42k0oN380fvP7o8c4ZKyooc-1731369136407-0.0.1.1-604800000";
-    const INVITE: &str = "bEBrwgHj";
-
-    let mut tokens = String::new();
-    let mut file = std::fs::File::open("./tokens.txt").unwrap();
-    file.read_to_string(&mut tokens).unwrap();
-    let vals = tokens
-        .split('\n')
-        .take(AMT)
-        .map(|s| s.to_string())
-        .collect::<Vec<String>>();
-
-    let mut setup_headers = easy_headers!({
-        "accept": "*/*",
-        "accept-language": "en-US",
-        "Accept-Encoding": "identity",
-        "content-type": "application/json",
-        "cookie": COOKIE,
-        "priority": "u=1, i",
-        "referer": "https://canary.discord.com/channels/@me/1295535782525796382",
-        "sec-ch-ua": "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"126\"",
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"Linux\"",
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "same-origin",
-        "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-        "x-debug-options": "bugReporterEnabled",
-        "x-discord-locale": "en-US",
-        "x-discord-timezone": "America/New_York",
-        "x-super-properties": "eyJvcyI6IkxpbnV4IiwiYnJvd3NlciI6IkNocm9tZSIsImRldmljZSI6IiIsInN5c3RlbV9sb2NhbGUiOiJlbi1VUyIsImJyb3dzZXJfdXNlcl9hZ2VudCI6Ik1vemlsbGEvNS4wIChYMTE7IExpbnV4IHg4Nl82NCkgQXBwbGVXZWJLaXQvNTM3LjM2IChLSFRNTCwgbGlrZSBHZWNrbykgQ2hyb21lLzEyNi4wLjAuMCBTYWZhcmkvNTM3LjM2IiwiYnJvd3Nlcl92ZXJzaW9uIjoiMTI2LjAuMC4wIiwib3NfdmVyc2lvbiI6IiIsInJlZmVycmVyIjoiIiwicmVmZXJyaW5nX2RvbWFpbiI6IiIsInJlZmVycmVyX2N1cnJlbnQiOiIiLCJyZWZlcnJpbmdfZG9tYWluX2N1cnJlbnQiOiIiLCJyZWxlYXNlX2NoYW5uZWwiOiJjYW5hcnkiLCJjbGllbnRfYnVpbGRfbnVtYmVyIjozNDE5NjYsImNsaWVudF9ldmVudF9zb3VyY2UiOm51bGx9"
-    });
-
-    let client = DiscordClient::new(None, Some(&setup_headers)).await;
-
-    for val in vals {
-        let client = client.clone();
-        let setup_headers = setup_headers.clone();
-
-        // Initialize WebSocket client and get session ID
-        let mut headers = setup_headers.clone();
-        headers.insert("authorization", val.parse().unwrap());
-
-        // let ws_client = WebsocketClient::builder()
-        //     .token(&val)
-        //     .connect(Some(setup_headers.clone()))
-        //     .await;
-
-        // for _i in 0..10 {
-        //     if ws_client.closed().await {
-        //         return; // skip invalid token
-        //     }
-        //     if ws_client.ready().await {
-        //         break;
-        //     }
-        //     tokio::time::sleep(Duration::from_secs(1)).await;
-        // }
-
-        // let session_id = ws_client.session_id().await.unwrap();
-
-        // Leave the server
-    let resp = client
-        .send_request(HttpRequest::Delete {
-            endpoint: format!("/users/@me/guilds/{}", GUILD_ID), // Assuming session ID or guild ID
-            body: Some(json!({"lurking": false})),
-            additional_headers: Some(headers.clone()),
-        });
-
-    let tasks: Vec<_> = vals
-        .into_iter()
-        .map(|val| val.to_string());
-
-            let client = client.clone();
-            let setup_headers = setup_headers.clone();
-            let invite = INVITE.to_string();
-            task::spawn(async move {
-                let mut headers = setup_headers.clone();
-                headers.insert("authorization", val.parse().unwrap());
-
-                let ws_client = WebsocketClient::builder()
-                    .token(&val)
-                    .connect(Some(setup_headers.clone()))
-                    .await;
-
-                for _i in 0..10 {
-                    if ws_client.closed().await {
-                        return; // skip invalid token
-                    }
-                    if ws_client.ready().await {
-                        break;
-                    }
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                }
-
-                let session_id = ws_client.session_id().await.unwrap();
-
-                // Join the server
-                let resp = client
-                    .send_request(HttpRequest::Post {
-                        endpoint: format!("/invites/{}", invite),
-                        body: Some(json!({"session_id": session_id})),
-                        additional_headers: Some(headers.clone()),
-                    })
-                    .await;
-
-                match resp {
-                    Ok(response) if response.status().is_success() => {
-                        println!("Token has joined the server: {}", val);
-                    }
-                    Ok(response) => {
-                        let headers = response.headers();
-                        let cookies = headers
-                            .get_all("set-cookie")
-                            .into_iter()
-                            .map(|header_value| header_value.to_str().unwrap_or("").to_string())
-                            .collect::<Vec<String>>();
-
-                        println!(
-                            "Token could not join the server: {}\n{}\n{}",
-                            val,
-                            response.status().as_str(),
-                            response.url()
-                        );
-                        // println!("{:?}", headers);
-                        // println!("{:?}", cookies);
-                        // println!("{}", response.text().await.unwrap());
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to send join request for token {}: {}", val, e);
-                    }
-                }
-            })
-            .await;
-
-        match resp.await {
-            Ok(response) if response.status().is_success() => {
-                println!("Token has left the server: {}", val);
-            }
-            Ok(response) => {
-                println!(
-                    "Token could not leave the server: {}\nStatus: {}\nURL: {}",
-                    val,
-                    response.status().as_str(),
-                    response.url()
-                );
-                println!("Headers: {:?}", response.headers());
-                println!("Response Body: {}", response.text().await.unwrap());
-            }
-            Err(e) => {
-                eprintln!("Failed to send leave request for token {}: {}", val, e);
-            }
-        }
-    }
 }
 
 
