@@ -178,6 +178,24 @@ fn build_super_properties(user_agent: &String) -> String {
     // return "eyJvcyI6IkxpbnV4IiwiYnJvd3NlciI6IkRpc2NvcmQgQ2xpZW50IiwicmVsZWFzZV9jaGFubmVsIjoic3RhYmxlIiwiY2xpZW50X3ZlcnNpb24iOiIwLjAuNzEiLCJvc192ZXJzaW9uIjoiNi4xLjExMi0xLU1BTkpBUk8iLCJvc19hcmNoIjoieDY0IiwiYXBwX2FyY2giOiJ4NjQiLCJzeXN0ZW1fbG9jYWxlIjoiZW4tVVMiLCJicm93c2VyX3VzZXJfYWdlbnQiOiJNb3ppbGxhLzUuMCAoWDExOyBMaW51eCB4ODZfNjQpIEFwcGxlV2ViS2l0LzUzNy4zNiAoS0hUTUwsIGxpa2UgR2Vja28pIGRpc2NvcmQvMC4wLjcxIENocm9tZS8xMjguMC42NjEzLjM2IEVsZWN0cm9uLzMyLjAuMCBTYWZhcmkvNTM3LjM2IiwiYnJvd3Nlcl92ZXJzaW9uIjoiMzIuMC4wIiwid2luZG93X21hbmFnZXIiOiJLREUsdW5rbm93biIsImRpc3RybyI6IlwiTWFuamFybyBMaW51eFwiIiwiY2xpZW50X2J1aWxkX251bWJlciI6MzM2OTczLCJuYXRpdmVfYnVpbGRfbnVtYmVyIjpudWxsLCJjbGllbnRfZXZlbnRfc291cmNlIjpudWxsfQ==".to_string();
 }
 
+pub fn http_default_headers(headers: &mut HeaderMap) {
+    headers.extend(easy_headers!({
+        "sec-ch-ua": "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"126\", \"Google Chrome\";v=\"126\"",
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": "\"macOS\"",
+        "upgrade-insecure-requests": "1",
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "sec-fetch-site": "none",
+        "sec-fetch-mode": "navigate",
+        "sec-fetch-user": "?1",
+        "sec-fetch-dest": "document",
+        "accept-encoding": "Identity",
+        "accept-language": "en-US,en;q=0.9"
+    }));
+
+}
+
 pub fn default_headers(user_agent: Option<String>) -> HeaderMap {
     let user_agent_1 = user_agent.unwrap_or(randua::new().safari().desktop().to_string());
     let context = "eyJsb2NhdGlvbiI6IlJlZ2lzdGVyIn0="

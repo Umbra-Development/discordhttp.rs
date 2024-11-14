@@ -1,6 +1,6 @@
 #![allow(unused_imports)]
 use crate::types::HttpRequest;
-use crate::utils::{default_headers, experiment_headers, merge_headermaps, ZlibStreamDecompressor};
+use crate::utils::{default_headers, experiment_headers, http_default_headers, merge_headermaps, ZlibStreamDecompressor};
 use crate::{easy_headers, easy_params};
 use flate2::write::{GzEncoder, ZlibEncoder};
 use flate2::Compression;
@@ -10,6 +10,7 @@ use futures_util::{SinkExt, StreamExt};
 use jsonwebtoken::{encode, EncodingKey, Header};
 use rquest::boring::ssl::{SslConnector, SslCurve, SslMethod, SslOptions, SslVersion};
 use rquest::tls::chrome::tls_template_6;
+use rquest::tls::chrome::{http2_template_3, tls_template_6};
 use tokio::sync::mpsc;
 use tokio::time::Duration;
 // Required for macro idfk why
@@ -282,32 +283,37 @@ pub struct DiscordClient {
 
 impl DiscordClient {
     pub async fn new(proxy: Option<rquest::Proxy>, headers: Option<&HeaderMap>) -> DiscordClient {
-        // let mut real_headers = default_headers(None);
+        let mut real_headers = default_headers(None);
 
-        // if headers.is_some() {
-        //     merge_headermaps(&mut real_headers, headers.unwrap().clone());
-        // }
+        if headers.is_some() {
+            merge_headermaps(&mut real_headers, headers.unwrap().clone());
+        }
+
+        let other_headers = experiment_headers(
+            rquest::Client::builder()
+                .impersonate_without_headers(Impersonate::Chrome128)
+                .build()
+                .unwrap(),
+        ).await;
+
+        merge_headermaps(&mut real_headers, other_headers);
+        let mut tls_settings = tls_template_6().unwrap();
+        // Pre enabled by lib - Permute Extensions, Shared key, ECH Grease
         
-        // let other_headers = experiment_headers(
-        //     rquest::Client::builder()
-        //         .impersonate_without_headers(Impersonate::Chrome128)
-        //         .build()
-        //         .unwrap(),
-        // )
-        // .await;
+        tls_settings.enable_ech_grease = false;
+        tls_settings.grease_enabled = Some(false);
+        tls_settings.enable_signed_cert_timestamps = true;
 
-        // merge_headermaps(&mut real_headers, other_headers);
-
- 
+        let impersonate = ImpersonateSettings::builder()
+            .tls(tls_settings)
+            .http2(http2_template_3())
+            .headers(Box::new(http_default_headers))
+            .build();
 
         let builder = rquest::Client::builder()
-            // .default_headers(real_headers)
-            .impersonate(Impersonate::Chrome130)
-            .cookie_store(true);
-
-     
-        // .use_preconfigured_tls(tls_preconfig())
-        // .max_tls_version(Version::TLS_1_2);
+            .default_headers(real_headers)
+            .cookie_store(true)
+            .use_preconfigured_tls(impersonate);
 
         let client = configure_proxy(builder, proxy).build().unwrap();
 
@@ -577,11 +583,11 @@ async fn token_join_server() {
 }
 
 
-#[tokio::test]
-async fn token_leave_server() {
-    const AMT: usize = 20;
-    const COOKIE: &'static str = "__dcfduid=0fcd91109d6611efae1ed79521365559; __sdcfduid=0fcd91119d6611efae1ed795213655598b948d3c4e7cc578aa33251431ebc69b61df95127d38dc547a44bc7473fee752; __cfruid=cd2fa6e43b05469121ae898f6ef1457336b61207-1731024714; _cfuvid=h6nmMqwDnSIhr4XXd8ff1xcx7Ja65elMtqugXC7Zd0Y-1731024714918-0.0.1.1-604800000; cf_clearance=goRmXw7HX3pV5vRIF0od.CU3GwuWF4.pZkSsRjXsRsc-1731024718-1.2.1.1-D8grOksTchA3sE9BLDIR4x7_oseYuBdfxTzVV1urGqa.DvNspCj0wn.nwKEFVR7K8KeohAg1GftGL1rOEN.PDmV4H9Gm47ygEVl7rji7Pv7ww2WZ4l.hxZQl4TjZAonXR6yj.pUaWNsW7UfCMP5UlaJhpgwLB2JFCLoNR8d9RAWkgkq0bPn9A3ScI6s6FZtzB6JJdVavs1tR19CatbXr8om.m2OF0hrzkx9x9DqauYZp5X29eXkQfLJsIBYcjAC.KAn6siozTPjTMs9qiJd9OROkXE81SPEyd4N4h4mjScXESw3TIQbqbK4KJI2MPG1vsqi0rghyHA7tRRMAI2mhuVF3ijfsHpx41cwbgceoJzzL9ecD1aWQuq_HvNnRGTXb";
-    const GUILD_ID: &str = "1299782013141913690";
+
+async fn token_join_leave() {
+    const AMT: usize = 10;
+    const COOKIE: &'static str = "__dcfduid=bc4b4a109d5011ef833e0b1fb32cadce; __sdcfduid=bc4b4a119d5011ef833e0b1fb32cadceafc4bb20a60e5c95bd6d09a28cf68415465b417ea1642a8ccb8a9b20681c9321; __stripe_mid=bb2e2063-095b-456c-b060-792d71d2b85bbddd17; locale=en-US; cf_clearance=LYUghigCzfgBXiwq6nbiLGeliXXxGjBTEBtvqZfmyDQ-1731204494-1.2.1.1-glZEsX_E9RRIgcHSIdYl7Xp4QWqcIAq0hQ_cEfgtfgSQxtQ0Xje_dCKGYClXsie8fkJRURCqnts9d3NJMtrqXh3qpa5XHiDRH7C187CVmsTYtwjN9Q6KdZnSYnObWUluMAucKQgkOBXt6.9USLXqkfcO9NHzWLRpeCvgDqvNDN6ndINs_a8qvq5WN_ekCPS4qvyO0tnNVazrvG44ekOm5Ndwv6dElienRCsc_FWoxynD2wjHVxeQC03qkiLzc0kxphnr.P3lM44ulp7CyarH4IwCCWllvUFa1iyVU.tVAoENBQcv0eXGNL9guDrKLm9ek1920bLrAnCk.B6.Eq6sODBlRWlp_AXb3AtoU8MFUrkydv1ZhH7pfiAeB3F1ZqUy; __cfruid=043fdb52b5cef834dbd0b7ffa9db222931cdbc53-1731369136; _cfuvid=qoTMYboLr9LqfE7tViZg42k0oN380fvP7o8c4ZKyooc-1731369136407-0.0.1.1-604800000";
+    const INVITE: &str = "bEBrwgHj";
 
     let mut tokens = String::new();
     let mut file = std::fs::File::open("./tokens.txt").unwrap();
@@ -641,15 +647,80 @@ async fn token_leave_server() {
         // let session_id = ws_client.session_id().await.unwrap();
 
         // Leave the server
-        let resp = client
-            .send_request(HttpRequest::Delete {
-                endpoint: format!("/users/@me/guilds/{}", GUILD_ID), // Assuming session ID or guild ID
-                body: Some(json!({"lurking": false})),
-                additional_headers: Some(headers.clone()),
+    let resp = client
+        .send_request(HttpRequest::Delete {
+            endpoint: format!("/users/@me/guilds/{}", GUILD_ID), // Assuming session ID or guild ID
+            body: Some(json!({"lurking": false})),
+            additional_headers: Some(headers.clone()),
+        });
+
+    let tasks: Vec<_> = vals
+        .into_iter()
+        .map(|val| val.to_string());
+
+            let client = client.clone();
+            let setup_headers = setup_headers.clone();
+            let invite = INVITE.to_string();
+            task::spawn(async move {
+                let mut headers = setup_headers.clone();
+                headers.insert("authorization", val.parse().unwrap());
+
+                let ws_client = WebsocketClient::builder()
+                    .token(&val)
+                    .connect(Some(setup_headers.clone()))
+                    .await;
+
+                for _i in 0..10 {
+                    if ws_client.closed().await {
+                        return; // skip invalid token
+                    }
+                    if ws_client.ready().await {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+
+                let session_id = ws_client.session_id().await.unwrap();
+
+                // Join the server
+                let resp = client
+                    .send_request(HttpRequest::Post {
+                        endpoint: format!("/invites/{}", invite),
+                        body: Some(json!({"session_id": session_id})),
+                        additional_headers: Some(headers.clone()),
+                    })
+                    .await;
+
+                match resp {
+                    Ok(response) if response.status().is_success() => {
+                        println!("Token has joined the server: {}", val);
+                    }
+                    Ok(response) => {
+                        let headers = response.headers();
+                        let cookies = headers
+                            .get_all("set-cookie")
+                            .into_iter()
+                            .map(|header_value| header_value.to_str().unwrap_or("").to_string())
+                            .collect::<Vec<String>>();
+
+                        println!(
+                            "Token could not join the server: {}\n{}\n{}",
+                            val,
+                            response.status().as_str(),
+                            response.url()
+                        );
+                        // println!("{:?}", headers);
+                        // println!("{:?}", cookies);
+                        // println!("{}", response.text().await.unwrap());
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to send join request for token {}: {}", val, e);
+                    }
+                }
             })
             .await;
 
-        match resp {
+        match resp.await {
             Ok(response) if response.status().is_success() => {
                 println!("Token has left the server: {}", val);
             }
