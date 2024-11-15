@@ -96,12 +96,64 @@ async fn get_headers() {
     }
 }
 
+#[tokio::test]
+async fn join_server_base() {
+    let invite = "Er697KFQ";
+    let mut tokens = String::new();
+    let mut file = std::fs::File::open("./tokens.txt").unwrap();
+    file.read_to_string(&mut tokens).unwrap();
+    let toks = tokens
+        .lines()
+        .take(5)
+        .map(|s| s.to_string())
+        .collect::<Vec<String>>();
+    
+    let client = DiscordClient::new(None, None).await;
+    let resp1 = client.send_request(HttpRequest::Get {
+        endpoint: format!("/invites/{}", invite),
+        params: Some(easy_params!({"with_counts": "true", "with_expiration": "true"})),
+        additional_headers: Some(easy_headers!({"authorization": toks.get(0).unwrap()})),
+    });
+    let resp = resp1.await.unwrap();
+    let text = resp.text().await.unwrap();
+    let val = from_str::<Value>(&text).unwrap();
+
+    let context_json = json!({
+        "location": "Invite Button Embed",
+        "location_message_id": "1305101487994572842",
+        "location_guild_id": val["guild"]["id"],
+        "location_channel_id": val["channel"]["id"],
+        "location_channel_type": val["channel"]["type"],
+        
+    });
+    let x_context_properties = encode(&serde_json::to_string(&context_json).unwrap());
+    
+    for val in toks {
+        
+        if let Ok(resp) = client
+            .send_request(HttpRequest::Post {
+                endpoint: format!("/invites/{}", invite),
+                body: Some(json!({"session_id": null})),
+                additional_headers: Some(easy_headers!({"authorization": val, "x-context-properties": x_context_properties})),
+            })
+            .await {
+            if resp.status().is_success() {
+                println!("Token: {val}\nSuccess\n{}", resp.text().await.unwrap());
+            } 
+        }
+
+
+    }
+
+
+}
+
 
 #[tokio::test]
 async fn token_join_server() {
     const AMT: usize = 5;
     const COOKIE: &'static str = "__dcfduid=0fcd91109d6611efae1ed79521365559; __sdcfduid=0fcd91119d6611efae1ed795213655598b948d3c4e7cc578aa33251431ebc69b61df95127d38dc547a44bc7473fee752; __cfruid=cd2fa6e43b05469121ae898f6ef1457336b61207-1731024714; _cfuvid=h6nmMqwDnSIhr4XXd8ff1xcx7Ja65elMtqugXC7Zd0Y-1731024714918-0.0.1.1-604800000; cf_clearance=goRmXw7HX3pV5vRIF0od.CU3GwuWF4.pZkSsRjXsRsc-1731024718-1.2.1.1-D8grOksTchA3sE9BLDIR4x7_oseYuBdfxTzVV1urGqa.DvNspCj0wn.nwKEFVR7K8KeohAg1GftGL1rOEN.PDmV4H9Gm47ygEVl7rji7Pv7ww2WZ4l.hxZQl4TjZAonXR6yj.pUaWNsW7UfCMP5UlaJhpgwLB2JFCLoNR8d9RAWkgkq0bPn9A3ScI6s6FZtzB6JJdVavs1tR19CatbXr8om.m2OF0hrzkx9x9DqauYZp5X29eXkQfLJsIBYcjAC.KAn6siozTPjTMs9qiJd9OROkXE81SPEyd4N4h4mjScXESw3TIQbqbK4KJI2MPG1vsqi0rghyHA7tRRMAI2mhuVF3ijfsHpx41cwbgceoJzzL9ecD1aWQuq_HvNnRGTXb";
-    const INVITE: &str = "PrW3sgc5";
+    const INVITE: &str = "Er697KFQ";
 
     let mut tokens = String::new();
     let mut auth_tokens = String::new();
@@ -196,7 +248,7 @@ async fn token_join_server() {
         
     });
 
-    let x_context_properties = base64::encode(&serde_json::to_string(&context_json).unwrap());
+    let x_context_properties = encode(&serde_json::to_string(&context_json).unwrap());
 
     setup_headers.insert(
         "x-context-properties",
