@@ -1,20 +1,6 @@
-[package]
-name = "discordhttp"
-version = "0.1.0"
-edition = "2021"
+[workspace]
+resolver = "3"
+members = ["spoofer", "discord"]
 
-[dependencies]
-serde = { version = "*", features = ["derive"]}
-serde_json = "*"
-url = "2.5.2"
-base64 = "0.22.1"
-tokio = { version = "1.41.0", features = ["macros", "rt-multi-thread"] }
-randua = "0.1.6"
-regex = "1.11.1"
-rquest = { version = "=0.27.5", features = ["boring-tls", "cookies", "json", "websocket"] }
-jsonwebtoken = "9.3.0"
-futures = "0.3.31"
-futures-util = "0.3.31"
-flate2 = { version = "1.0.34", features = ["zlib"] }
 
 
