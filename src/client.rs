@@ -127,7 +127,13 @@ async fn join_server_base() {
         
     });
     let x_context_properties = encode(&serde_json::to_string(&context_json).unwrap());
-    
+
+    let resp = client.send_base_request(
+        "https://httpbin.org/headers",
+        easy_headers!({"authorization": toks.get(0).unwrap(), "x-context-properties": x_context_properties})
+    ).await;
+
+    // I'll do this after my headers are valid
     for val in toks {
         
         if let Ok(resp) = client
@@ -139,10 +145,10 @@ async fn join_server_base() {
             .await {
             if resp.status().is_success() {
                 println!("Token: {val}\nSuccess\n{}", resp.text().await.unwrap());
+            } else {
+                println!("Status: {}\n{}", resp.status().as_str(), resp.text().await.unwrap());
             } 
         }
-
-
     }
 
 

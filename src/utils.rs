@@ -181,12 +181,34 @@ fn build_super_properties(user_agent: &String) -> String {
 pub fn http_default_headers(headers: &mut HeaderMap) {
     // This is changed immediately it's just some stuff for lib
     // Dw too much
+    let user_agent_1 = randua::new().chrome().desktop().to_string();
+    let platform_regex = Regex::new(r"\(([^;]+);").unwrap();
+    let platform = platform_regex
+        .captures(&user_agent_1)
+        .map(|caps| caps[1].to_string())
+        .unwrap_or("Unknown".to_string());
+    
+    let browser_regex =
+        Regex::new(r"(?i)(firefox|chrome|safari|discord|electron)/([0-9\.]+)").unwrap();
+    let platform_regex = Regex::new(r"\(([^;]+);").unwrap();
+
+    let browser = browser_regex
+        .captures(&user_agent_1)
+        .map(|caps| (caps[1].to_string(), caps[2].to_string()))
+        .unwrap_or(("Unknown".to_string(), "Unknown".to_string()));
+
+    let platform = platform_regex
+        .captures(&user_agent_1)
+        .map(|caps| caps[1].to_string())
+        .unwrap_or("Unknown".to_string());
+
+
     headers.extend(easy_headers!({
-        "sec-ch-ua": "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"126\", \"Google Chrome\";v=\"126\"",
+        "sec-ch-ua": "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"128\", \"Google Chrome\";v=\"128\"",
         "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"macOS\"",
+        "sec-ch-ua-platform": platform,
         "upgrade-insecure-requests": "1",
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "user-agent": user_agent_1, 
         "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "sec-fetch-site": "none",
         "sec-fetch-mode": "navigate",
@@ -221,7 +243,7 @@ pub fn decode_user_id(token_part: &str) -> Option<String> {
 
 
 pub fn default_headers(user_agent: Option<String>) -> HeaderMap {
-    let user_agent_1 = user_agent.unwrap_or(randua::new().safari().desktop().to_string());
+    let user_agent_1 = user_agent.unwrap_or(randua::new().chrome().desktop().to_string());
     let context = "eyJsb2NhdGlvbiI6IlJlZ2lzdGVyIn0="
         .parse::<String>()
         .expect("valid");
