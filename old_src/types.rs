@@ -11,30 +11,30 @@ const ROOT: &str = "https://canary.discord.com/api/v9";
 #[derive(Debug, Clone)]
 pub enum HttpRequest {
     Get {
-        endpoint: String,
+        endpoint: Into<String>,
         params: Option<HashMap<String, String>>,
         additional_headers: Option<HeaderMap<HeaderValue>>,
     },
     Post {
-        endpoint: String,
+        endpoint: Into<String>,
         body: Option<Value>,
         additional_headers: Option<HeaderMap<HeaderValue>>,
     },
     Put {
-        endpoint: String,
+        endpoint: Into<String>,
         body: Option<Value>,
         additional_headers: Option<HeaderMap<HeaderValue>>,
     },
     Delete {
-        endpoint: String,
+        endpoint: Into<String>,
         body: Option<Value>,
         additional_headers: Option<HeaderMap<HeaderValue>>,
     },
     Patch {
-        endpoint: String,
+        endpoint: Into<String>,
         body: Option<Value>,
         additional_headers: Option<HeaderMap<HeaderValue>>,
-    }
+    },
 }
 
 impl HttpRequest {
@@ -96,7 +96,7 @@ impl HttpRequest {
                     request = request.json(body);
                 }
                 request
-            },
+            }
             HttpRequest::Patch {
                 endpoint,
                 body,

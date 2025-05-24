@@ -42,7 +42,7 @@ impl HttpRequest {
                 params,
                 additional_headers,
             } => {
-                let mut request = client.request(Method::GET, format!("{}{}", root, endpoint));
+                let mut request = client.request(Method::GET, format!("{root}{endpoint}"));
                 if let Some(params) = params {
                     request = request.query(&params);
                 }
@@ -56,7 +56,7 @@ impl HttpRequest {
                 body,
                 additional_headers,
             } => {
-                let mut request = client.request(Method::POST, format!("{}{}", root, endpoint));
+                let mut request = client.request(Method::POST, format!("{root}{endpoint}"));
                 if let Some(body) = body {
                     request = request.json(body);
                 }
@@ -70,7 +70,7 @@ impl HttpRequest {
                 body,
                 additional_headers,
             } => {
-                let mut request = client.request(Method::PUT, format!("{}{}", root, endpoint));
+                let mut request = client.request(Method::PUT, format!("{root}{endpoint}"));
                 if let Some(body) = body {
                     request = request.json(body);
                 }
@@ -84,7 +84,7 @@ impl HttpRequest {
                 body,
                 additional_headers,
             } => {
-                let mut request = client.request(Method::DELETE, format!("{}{}", root, endpoint));
+                let mut request = client.request(Method::DELETE, format!("{root}{endpoint}"));
                 if let Some(headers) = additional_headers {
                     request = request.headers(headers.to_owned())
                 }
@@ -99,7 +99,7 @@ impl HttpRequest {
                 body,
                 additional_headers,
             } => {
-                let mut request = client.request(Method::PATCH, format!("{}{}", root, endpoint));
+                let mut request = client.request(Method::PATCH, format!("{root}{endpoint}"));
                 if let Some(body) = body {
                     request = request.json(body);
                 }

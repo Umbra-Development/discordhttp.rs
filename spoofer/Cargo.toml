@@ -14,3 +14,4 @@ rquest = { version = "=5.1.0", features = ["cookies", "json", "websocket"] }
 futures = "0.3.31"
 flate2 = { version = "1.0.34", features = ["zlib"] }
 rquest-util = "2.2.1"
+tokio = { version = "1.45.0", features = ["macros", "rt-multi-thread"] }
