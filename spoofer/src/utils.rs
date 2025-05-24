@@ -1,4 +1,7 @@
-use rquest::header::{HeaderMap, HeaderName, HeaderValue};
+use rquest::{
+    SslCurve,
+    header::{HeaderMap, HeaderName, HeaderValue},
+};
 
 #[macro_export]
 macro_rules! easy_headers {
@@ -24,8 +27,11 @@ macro_rules! easy_params {
     }};
 }
 
-pub fn decode(s: &str) -> Result<String, FromUtf8Error> {
-    String::from_utf8(STANDARD_NO_PAD.decode(s).unwrap())
+#[macro_export]
+macro_rules! join {
+    ($sep:expr, $first:expr $(, $rest:expr)*) => {
+        concat!($first $(, $sep, $rest)*)
+    };
 }
 
 pub fn merge_headermaps(first: &mut HeaderMap, second: HeaderMap) {
