@@ -1,3 +1,2 @@
+mod compression;
 mod types;
-
-
