@@ -1,9 +1,9 @@
 use client::SpoofedClient;
 use rquest::EmulationProviderFactory;
 use types::HttpRequest;
-mod client;
-mod types;
-mod utils;
+pub mod client;
+pub mod types;
+pub mod utils;
 
 #[tokio::test]
 async fn ja3_test() {
