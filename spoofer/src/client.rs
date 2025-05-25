@@ -198,6 +198,7 @@ impl SpoofedClient {
         }
     }
 
+
     pub async fn send_request(&self, request: HttpRequest) -> Result<Response, rquest::Error> {
         let builder = request.to_request_builder(&self.root.to_string(), &self.client);
         builder.send().await
