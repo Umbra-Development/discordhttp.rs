@@ -24,7 +24,7 @@ const REAL_CURVES: &[SslCurve] = &[
 const CIPHER_LIST: &str = join!(
     ":",
     // This one is 4865 but it doesn't appear
-    "TLS_AES_127_GCM_SHA256",
+    "TLS_AES_128_GCM_SHA256",
     "TLS_CHACHA20_POLY1305_SHA256",
     "TLS_AES_256_GCM_SHA384",
     "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
